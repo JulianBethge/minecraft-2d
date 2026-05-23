@@ -170,33 +170,50 @@ var zombies          = [];
 var MAX_ZOMBIES      = 20;
 var zombieSpawnTimer = Date.now();
 
-function spawnZombie() {
+// Einen einzelnen Zombie an einer bestimmten Position hinzufügen
+function addZombieAt(col, row) {
+  if (zombies.length >= MAX_ZOMBIES) return false;
+  if (getTile(col, row)   !== AIR) return false;
+  if (getTile(col, row+1) !== AIR) return false;
+  if (!isSolid(getTile(col, row+2)))  return false;
+  zombies.push({
+    x:            col * TILE + (TILE - 22) / 2,
+    y:            row * TILE,
+    width:        22,
+    height:       48,
+    hp:           3,
+    maxHp:        3,
+    velocityY:    0,
+    onGround:     false,
+    lastHit:      0,         // wann hat dieser Zombie zuletzt den Spieler getroffen
+    jumpCooldown: 0,         // wann hat er zuletzt gesprungen
+    dir:          1
+  });
+  return true;
+}
+
+// Sucht eine gültige Höhlen-Position und spawnt dort eine Gruppe (2–4 Zombies)
+function spawnGroup() {
   for (var attempt = 0; attempt < 150; attempt++) {
-    var col = Math.floor(1 + Math.random() * (WORLD_COLS - 2));
-    var row = Math.floor(14 + Math.random() * (WORLD_ROWS - 18));
-    // Zombie braucht 2 freie Luft-Tiles und festen Boden darunter
-    if (getTile(col, row) === AIR &&
-        getTile(col, row+1) === AIR &&
-        isSolid(getTile(col, row+2))) {
-      zombies.push({
-        x:         col * TILE + (TILE - 22) / 2,
-        y:         row * TILE,
-        width:     22,
-        height:    48,
-        hp:        3,
-        maxHp:     3,
-        velocityY: 0,
-        onGround:  false,
-        lastHit:   0,    // wann hat dieser Zombie zuletzt den Spieler getroffen
-        dir:       1     // Laufrichtung: 1=rechts, -1=links
-      });
-      return;
+    var baseCol = Math.floor(1 + Math.random() * (WORLD_COLS - 2));
+    var baseRow = Math.floor(14 + Math.random() * (WORLD_ROWS - 18));
+    // Basis-Position muss gültig sein
+    if (!addZombieAt(baseCol, baseRow)) continue;
+
+    // Noch 1–3 weitere Zombies in der Nähe spawnen
+    var extra = 1 + Math.floor(Math.random() * 3);
+    for (var g = 0; g < extra; g++) {
+      var dc = Math.floor(Math.random() * 7) - 3; // ±3 Spalten versetzt
+      var c  = Math.max(1, Math.min(WORLD_COLS - 2, baseCol + dc));
+      addZombieAt(c, baseRow);  // klappt nur wenn freier Platz
     }
+    return;
   }
 }
 
-// Beim Start 6 Zombies spawnen
-for (var z = 0; z < 6; z++) spawnZombie();
+// Beim Start 2 Gruppen spawnen
+spawnGroup();
+spawnGroup();
 
 // ------------------------------------------------------------
 // Inventar + Block-Auswahl
@@ -247,21 +264,23 @@ canvas.addEventListener("click", function(e) {
   // Schwinganimation starten
   player.swingTimer = Date.now();
 
-  // Zombie in der Nähe des Klicks?
+  // Treffer: Mauszeiger muss direkt auf dem Zombie sein
   var hitZombie = false;
   for (var i = 0; i < zombies.length; i++) {
-    var z  = zombies[i];
-    var zx = z.x + z.width  / 2;
-    var zy = z.y + z.height / 2;
-    var dx = mouse.worldX - zx;
-    var dy = mouse.worldY - zy;
-    var distToClick  = Math.sqrt(dx*dx + dy*dy);
-    // Spieler-zu-Zombie-Abstand (Reichweite prüfen)
+    var z = zombies[i];
+
+    // Ist der Mauszeiger innerhalb der Zombie-Fläche?
+    var cursorOnZombie = mouse.worldX >= z.x && mouse.worldX <= z.x + z.width &&
+                         mouse.worldY >= z.y && mouse.worldY <= z.y + z.height;
+
+    // Ist der Spieler nah genug (Reichweite)?
     var px = player.x + player.width  / 2;
     var py = player.y + player.height / 2;
+    var zx = z.x + z.width  / 2;
+    var zy = z.y + z.height / 2;
     var playerDist = Math.sqrt((px-zx)*(px-zx) + (py-zy)*(py-zy));
 
-    if (distToClick < 30 && playerDist < REACH * TILE) {
+    if (cursorOnZombie && playerDist < REACH * TILE) {
       z.hp--;
       hitZombie = true;
       if (z.hp <= 0) zombies.splice(i, 1);
@@ -316,7 +335,8 @@ function restartGame() {
   player.hp = 10; player.dead = false; player.lastRegen = Date.now();
   for (var k in inventory) inventory[k] = 0;
   zombies = [];
-  for (var i = 0; i < 3; i++) spawnZombie();
+  spawnGroup();
+  spawnGroup();
   zombieSpawnTimer = Date.now();
   updateCamera();
 }
@@ -394,27 +414,52 @@ function update() {
     if (distPX < 320) {
       z.dir = (zCX < pCX) ? 1 : -1;
 
-      // Horizontale Bewegung mit Wandkollision
-      var zStep = z.dir * 1.5;
-      z.x += zStep;
+      // Horizontale Bewegung
+      z.x += z.dir * 1.5;
 
       // Welche Zeilen belegt der Zombie (oben und unten)?
       var zRowTop = Math.floor(z.y / TILE);
       var zRowBot = Math.floor((z.y + z.height - 1) / TILE);
+      var hitWall = false;
 
       if (z.dir > 0) {
-        // nach rechts: rechte Kante prüfen
         var wallCol = Math.floor((z.x + z.width - 1) / TILE);
         if (isSolid(getTile(wallCol, zRowTop)) || isSolid(getTile(wallCol, zRowBot))) {
-          z.x   = wallCol * TILE - z.width; // an Wand einrasten
-          z.dir = -1;                        // umdrehen
+          z.x     = wallCol * TILE - z.width;
+          hitWall = true;
         }
       } else {
-        // nach links: linke Kante prüfen
         var wallCol = Math.floor(z.x / TILE);
         if (isSolid(getTile(wallCol, zRowTop)) || isSolid(getTile(wallCol, zRowBot))) {
-          z.x   = (wallCol + 1) * TILE;     // an Wand einrasten
-          z.dir = 1;                         // umdrehen
+          z.x     = (wallCol + 1) * TILE;
+          hitWall = true;
+        }
+      }
+
+      if (hitWall) {
+        if (z.onGround && Date.now() - z.jumpCooldown > 900) {
+          // Auf dem Boden + Wand → drüber springen
+          z.velocityY    = JUMP_FORCE * 0.88;
+          z.onGround     = false;
+          z.jumpCooldown = Date.now();
+        } else if (!z.onGround) {
+          // In der Luft + Wand → abprallen (Richtung umkehren)
+          z.dir *= -1;
+          z.x   += z.dir * 4;  // kleiner Schubs weg von der Wand
+        }
+      }
+
+      // Auch springen wenn das Tile direkt vor ihm auf Bodenhöhe eine Wand ist
+      // (damit er schon vor dem Aufprall abspringt, nicht erst danach)
+      if (!hitWall && z.onGround && Date.now() - z.jumpCooldown > 900) {
+        var feetRow    = Math.floor((z.y + z.height) / TILE);
+        var lookCol    = (z.dir > 0)
+          ? Math.floor((z.x + z.width + 2) / TILE)
+          : Math.floor((z.x - 2) / TILE);
+        if (isSolid(getTile(lookCol, feetRow - 1))) {
+          z.velocityY    = JUMP_FORCE * 0.88;
+          z.onGround     = false;
+          z.jumpCooldown = Date.now();
         }
       }
     }
@@ -426,15 +471,53 @@ function update() {
     var zCL = Math.floor(z.x / TILE);
     var zCR = Math.floor((z.x + z.width - 1) / TILE);
     if (z.velocityY >= 0) {
+      // Fällt nach unten → Bodenkollision
       var zRow = Math.floor((z.y + z.height) / TILE);
       if (isSolid(getTile(zCL, zRow)) || isSolid(getTile(zCR, zRow))) {
         z.y = zRow * TILE - z.height; z.velocityY = 0; z.onGround = true;
       }
+    } else {
+      // Springt nach oben → Deckenkollision (war vorher nicht vorhanden!)
+      var zRow = Math.floor(z.y / TILE);
+      if (isSolid(getTile(zCL, zRow)) || isSolid(getTile(zCR, zRow))) {
+        z.y         = (zRow + 1) * TILE;
+        z.velocityY = 0;   // Aufprall stoppen, danach fällt der Zombie wieder
+      }
+    }
+
+    // Zombie darf nicht in den Spieler hineinlaufen → Pushback
+    var ox = player.x < z.x + z.width  && player.x + player.width  > z.x;
+    var oy = player.y < z.y + z.height && player.y + player.height > z.y;
+    if (ox && oy) {
+      // Zombie auf die Seite schieben, von der er kam
+      if (z.x + z.width / 2 >= player.x + player.width / 2) {
+        z.x = player.x + player.width + 1;   // Zombie ist rechts → nach rechts
+      } else {
+        z.x = player.x - z.width - 1;        // Zombie ist links → nach links
+      }
+
+      // Wandkollision nach dem Pushback prüfen:
+      // Falls der Zombie jetzt in einer Wand steckt, zurück an die Wandkante snappen
+      var pbRowTop = Math.floor(z.y / TILE);
+      var pbRowBot = Math.floor((z.y + z.height - 1) / TILE);
+      var pbColR   = Math.floor((z.x + z.width - 1) / TILE);
+      var pbColL   = Math.floor(z.x / TILE);
+      if (isSolid(getTile(pbColR, pbRowTop)) || isSolid(getTile(pbColR, pbRowBot))) {
+        z.x = pbColR * TILE - z.width;
+      }
+      if (isSolid(getTile(pbColL, pbRowTop)) || isSolid(getTile(pbColL, pbRowBot))) {
+        z.x = (pbColL + 1) * TILE;
+      }
+
+      // Weltgrenzen einhalten
+      if (z.x < 0)                          z.x = 0;
+      if (z.x + z.width > WORLD_COLS * TILE) z.x = WORLD_COLS * TILE - z.width;
+
+      // Überlappung neu berechnen (für den Schadenscheck direkt danach)
+      ox = player.x < z.x + z.width && player.x + player.width > z.x;
     }
 
     // Berührt der Zombie den Spieler? → alle 2 Sekunden 0,5 HP Schaden
-    var ox = player.x < z.x + z.width  && player.x + player.width  > z.x;
-    var oy = player.y < z.y + z.height && player.y + player.height > z.y;
     if (ox && oy) {
       var t2 = Date.now();
       if (t2 - z.lastHit >= 2000) {
@@ -445,9 +528,9 @@ function update() {
     }
   }
 
-  // --- Neuen Zombie spawnen (alle 3 Sek, max 20) ---
-  if (zombies.length < MAX_ZOMBIES && Date.now() - zombieSpawnTimer > 3000) {
-    spawnZombie();
+  // --- Neue Zombie-Gruppe spawnen (alle 4 Sek, max 20) ---
+  if (zombies.length < MAX_ZOMBIES && Date.now() - zombieSpawnTimer > 4000) {
+    spawnGroup();
     zombieSpawnTimer = Date.now();
   }
 
@@ -588,23 +671,75 @@ function drawZombies() {
     var zx = Math.floor(z.x - cameraX);
     var zy = Math.floor(z.y - cameraY);
 
-    // Körper (grün)
-    ctx.fillStyle = "#2e7d32";
+    // Körperfarbe wird dunkler je mehr Schaden
+    var bodyColor = z.hp === 3 ? "#2e7d32" : z.hp === 2 ? "#1b5e20" : "#0a2e0a";
+    var headColor = z.hp === 3 ? "#388e3c" : z.hp === 2 ? "#2e5e30" : "#1a3a1a";
+
+    // Körper
+    ctx.fillStyle = bodyColor;
     ctx.fillRect(zx, zy+16, z.width, 32);
     // Kopf
-    ctx.fillStyle = "#388e3c";
+    ctx.fillStyle = headColor;
     ctx.fillRect(zx+1, zy, z.width-2, 18);
-    // Augen (rot!)
+
+    // Augen – bei 1 HP ein Auge "zu" (X-Auge)
     ctx.fillStyle = "#e53935";
     ctx.fillRect(zx+3,  zy+5, 5, 5);
-    ctx.fillRect(zx+14, zy+5, 5, 5);
-    // Arme (Zombie-typisch ausgestreckt)
-    ctx.fillStyle = "#2e7d32";
+    if (z.hp > 1) {
+      ctx.fillRect(zx+14, zy+5, 5, 5);
+    } else {
+      // Auge zu: kleines X
+      ctx.strokeStyle = "#e53935";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(zx+13, zy+5); ctx.lineTo(zx+19, zy+10); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(zx+19, zy+5); ctx.lineTo(zx+13, zy+10); ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+
+    // Arme ausgestreckt
+    ctx.fillStyle = bodyColor;
     if (z.dir >= 0) {
       ctx.fillRect(zx + z.width, zy+18, 10, 6);
     } else {
       ctx.fillRect(zx - 10, zy+18, 10, 6);
     }
+
+    // --- Wunden als rote Schnitte ---
+    ctx.strokeStyle = "#cc0000";
+    ctx.lineWidth   = 2;
+
+    if (z.hp <= 2) {
+      // Erste Wunde: Schnitt quer über den Körper
+      ctx.beginPath();
+      ctx.moveTo(zx + 2,  zy + 20);
+      ctx.lineTo(zx + 16, zy + 32);
+      ctx.stroke();
+      // Blutfleck
+      ctx.fillStyle = "rgba(180,0,0,0.55)";
+      ctx.fillRect(zx + 5, zy + 22, 7, 4);
+    }
+
+    if (z.hp <= 1) {
+      // Zweite Wunde: Schnitt über den Kopf
+      ctx.beginPath();
+      ctx.moveTo(zx + 4,  zy + 2);
+      ctx.lineTo(zx + 17, zy + 13);
+      ctx.stroke();
+      // Dritte Wunde: zweiter Körperschnitt
+      ctx.beginPath();
+      ctx.moveTo(zx + 14, zy + 26);
+      ctx.lineTo(zx + 3,  zy + 38);
+      ctx.stroke();
+      // Blutflecken
+      ctx.fillStyle = "rgba(180,0,0,0.6)";
+      ctx.fillRect(zx + 7,  zy + 4,  6, 3);
+      ctx.fillRect(zx + 4,  zy + 34, 8, 3);
+      // Dunkle Überlagerung – sieht schwer verletzt aus
+      ctx.fillStyle = "rgba(0,0,0,0.28)";
+      ctx.fillRect(zx, zy, z.width, z.height);
+    }
+
+    ctx.lineWidth = 1;
 
     // HP-Balken über dem Zombie
     ctx.fillStyle = "#333";
@@ -685,9 +820,68 @@ function drawGameOver() {
 }
 
 // ------------------------------------------------------------
+// updateWater: Wasser fällt nach unten und breitet sich seitlich aus
+// Tick-Rate: Schritt 1 (fallen) jeden Frame, Schritt 2 (fließen) alle 4 Frames
+// ------------------------------------------------------------
+var waterTick = 0;
+
+function updateWater() {
+  waterTick++;
+
+  // --- Schritt 1: Fallen (jeden Frame, von unten nach oben) ---
+  for (var row = WORLD_ROWS - 2; row >= 0; row--) {
+    for (var col = 1; col < WORLD_COLS - 1; col++) {
+      if (world[row][col] !== WATER) continue;
+      if (world[row + 1][col] !== AIR)  continue;
+
+      // Tiefsten Luft-Block darunter suchen
+      var deepest = row + 1;
+      while (deepest + 1 < WORLD_ROWS - 1 && world[deepest + 1][col] === AIR) {
+        deepest++;
+      }
+      world[row][col]     = AIR;
+      world[deepest][col] = WATER;
+    }
+  }
+
+  // --- Schritt 2: Seitlich fließen (nur alle 4 Frames) ---
+  if (waterTick % 4 !== 0) return;
+
+  // Von unten nach oben, damit tiefer liegendes Wasser zuerst fließt
+  for (var row = WORLD_ROWS - 2; row >= 0; row--) {
+    for (var col = 1; col < WORLD_COLS - 1; col++) {
+      if (world[row][col] !== WATER) continue;
+      // Nur fließen wenn kein Fall mehr möglich
+      if (world[row + 1][col] === AIR)  continue;
+
+      var leftFree  = col > 1            && world[row][col - 1] === AIR;
+      var rightFree = col < WORLD_COLS-2 && world[row][col + 1] === AIR;
+
+      if (leftFree && rightFree) {
+        // Beide Seiten frei → abwechselnd links oder rechts fließen
+        // (nie das Original behalten + neue erstellen → kein Vermehren)
+        world[row][col] = AIR;
+        if ((col + waterTick) % 2 === 0) {
+          world[row][col - 1] = WATER;
+        } else {
+          world[row][col + 1] = WATER;
+        }
+      } else if (leftFree) {
+        world[row][col]     = AIR;
+        world[row][col - 1] = WATER;
+      } else if (rightFree) {
+        world[row][col]     = AIR;
+        world[row][col + 1] = WATER;
+      }
+    }
+  }
+}
+
+// ------------------------------------------------------------
 // Game Loop
 // ------------------------------------------------------------
 function gameLoop() {
+  updateWater();
   drawBackground();
   drawWorld();
   drawTarget();
