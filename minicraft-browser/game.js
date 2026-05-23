@@ -19,12 +19,12 @@ var REACH      = 4;    // Reichweite in Tiles
 // ------------------------------------------------------------
 // Block-Typen
 // ------------------------------------------------------------
-var AIR = 0, GRASS = 1, DIRT = 2, STONE = 3, WOOD = 4, LEAVES = 5, WATER = 6, WATER_HALF = 7;
+var AIR = 0, GRASS = 1, DIRT = 2, STONE = 3, WOOD = 4, LEAVES = 5, WATER = 6;
 
 var COLORS = {};
 COLORS[GRASS]  = "#6ab04c"; COLORS[DIRT]   = "#9b5e28";
 COLORS[STONE]  = "#808080"; COLORS[WOOD]   = "#7a5230";
-COLORS[LEAVES] = "#2e8b2e"; COLORS[WATER]  = "#2980b9"; COLORS[WATER_HALF] = "#2980b9";
+COLORS[LEAVES] = "#2e8b2e"; COLORS[WATER]  = "#2980b9";
 
 var NAMES = {};
 NAMES[GRASS]  = "Gras";  NAMES[DIRT]   = "Erde";
@@ -117,6 +117,22 @@ function generateWorld() {
 }
 
 generateWorld();
+
+// ------------------------------------------------------------
+// Wasser-Füll-Niveau: wLevel[row][col] = 0 (kein Wasser) oder 1–8
+// 8 = voller Block, 4 = halb, 2 = Viertel, 1 = Achtel
+// ------------------------------------------------------------
+var wLevel = [];
+function initWaterLevels() {
+  for (var r = 0; r < WORLD_ROWS; r++) {
+    if (!wLevel[r]) wLevel[r] = [];
+    for (var c = 0; c < WORLD_COLS; c++) {
+      // Jedes neu generierte Wasser-Tile fängt voll (8) an
+      wLevel[r][c] = (world[r][c] === WATER) ? 8 : 0;
+    }
+  }
+}
+initWaterLevels();
 
 // Startposition in der Mitte der Welt finden
 function findStart() {
@@ -292,7 +308,7 @@ canvas.addEventListener("click", function(e) {
     // Block abbauen
     if (!mouse.inRange) return;
     var type = getTile(mouse.col, mouse.row);
-    if (type !== AIR && type !== WATER && type !== WATER_HALF) {
+    if (type !== AIR && type !== WATER) {
       world[mouse.row][mouse.col] = AIR;
       if (inventory[type] !== undefined) inventory[type]++;
     }
@@ -304,8 +320,7 @@ canvas.addEventListener("contextmenu", function(e) {
   e.preventDefault();
   if (player.dead) return;
   if (!mouse.inRange) return;
-  var placeTarget = getTile(mouse.col, mouse.row);
-  if (placeTarget !== AIR && placeTarget !== WATER_HALF) return;
+  if (getTile(mouse.col, mouse.row) !== AIR) return;
   if (inventory[selectedBlock] <= 0) return;
   var pCL = Math.floor(player.x / TILE);
   var pCR = Math.floor((player.x + player.width  - 1) / TILE);
@@ -330,6 +345,7 @@ function getTile(col, row) {
 
 function restartGame() {
   generateWorld();
+  initWaterLevels();    // Füll-Niveaus für neue Welt zurücksetzen
   var s = findStart();
   player.x = s.col * TILE; player.y = s.row * TILE - 56;
   player.velocityY = 0; player.onGround = false;
@@ -486,39 +502,9 @@ function update() {
       }
     }
 
-    // Zombie darf nicht in den Spieler hineinlaufen → Pushback
+    // Berührt der Zombie den Spieler? → alle 2 Sekunden 0,5 HP Schaden
     var ox = player.x < z.x + z.width  && player.x + player.width  > z.x;
     var oy = player.y < z.y + z.height && player.y + player.height > z.y;
-    if (ox && oy) {
-      // Zombie auf die Seite schieben, von der er kam
-      if (z.x + z.width / 2 >= player.x + player.width / 2) {
-        z.x = player.x + player.width + 1;   // Zombie ist rechts → nach rechts
-      } else {
-        z.x = player.x - z.width - 1;        // Zombie ist links → nach links
-      }
-
-      // Wandkollision nach dem Pushback prüfen:
-      // Falls der Zombie jetzt in einer Wand steckt, zurück an die Wandkante snappen
-      var pbRowTop = Math.floor(z.y / TILE);
-      var pbRowBot = Math.floor((z.y + z.height - 1) / TILE);
-      var pbColR   = Math.floor((z.x + z.width - 1) / TILE);
-      var pbColL   = Math.floor(z.x / TILE);
-      if (isSolid(getTile(pbColR, pbRowTop)) || isSolid(getTile(pbColR, pbRowBot))) {
-        z.x = pbColR * TILE - z.width;
-      }
-      if (isSolid(getTile(pbColL, pbRowTop)) || isSolid(getTile(pbColL, pbRowBot))) {
-        z.x = (pbColL + 1) * TILE;
-      }
-
-      // Weltgrenzen einhalten
-      if (z.x < 0)                          z.x = 0;
-      if (z.x + z.width > WORLD_COLS * TILE) z.x = WORLD_COLS * TILE - z.width;
-
-      // Überlappung neu berechnen (für den Schadenscheck direkt danach)
-      ox = player.x < z.x + z.width && player.x + player.width > z.x;
-    }
-
-    // Berührt der Zombie den Spieler? → alle 2 Sekunden 0,5 HP Schaden
     if (ox && oy) {
       var t2 = Date.now();
       if (t2 - z.lastHit >= 2000) {
@@ -533,6 +519,45 @@ function update() {
   if (zombies.length < MAX_ZOMBIES && Date.now() - zombieSpawnTimer > 4000) {
     spawnGroup();
     zombieSpawnTimer = Date.now();
+  }
+
+  // --- Zombies blockieren den Spieler (wie Wände) ──────────────────────────
+  // Läuft NACH allen Zombie-Bewegungen, damit die Auflösung immer stimmt.
+  // Statt den Zombie wegzuschieben (→ Wand-Bug), wird jetzt der SPIELER geblockt.
+  for (var zi = 0; zi < zombies.length; zi++) {
+    var z = zombies[zi];
+    var zox = player.x < z.x + z.width  && player.x + player.width  > z.x;
+    var zoy = player.y < z.y + z.height && player.y + player.height > z.y;
+    if (!zox || !zoy) continue;
+
+    // Wie weit überlappt der Spieler in jede Richtung?
+    var pushL = (player.x + player.width)  - z.x;       // Spieler ragt von links rein
+    var pushR = (z.x + z.width) - player.x;             // Spieler ragt von rechts rein
+    var pushD = (player.y + player.height) - z.y;       // Spieler ragt von oben rein
+    var pushU = (z.y + z.height) - player.y;            // Spieler ragt von unten rein
+    var minP  = Math.min(pushL, pushR, pushD, pushU);
+
+    if (minP === pushD && player.velocityY >= 0) {
+      // Spieler fällt von oben auf den Zombie → landet drauf (wie auf einem Block)
+      player.y         = z.y - player.height;
+      player.velocityY = 0;
+      player.onGround  = true;
+    } else if (minP === pushU && player.velocityY <= 0) {
+      // Spieler springt von unten gegen den Zombie → Sprung gestoppt
+      player.y         = z.y + z.height;
+      player.velocityY = 0;
+    } else if (minP === pushL) {
+      // Zombie blockiert rechte Seite des Spielers
+      player.x = z.x - player.width;
+    } else {
+      // Zombie blockiert linke Seite des Spielers
+      player.x = z.x + z.width;
+    }
+
+    // Weltgrenzen nach Verschiebung einhalten
+    if (player.x < 0) player.x = 0;
+    if (player.x + player.width > WORLD_COLS * TILE)
+      player.x = WORLD_COLS * TILE - player.width;
   }
 
   updateCamera();
@@ -565,13 +590,18 @@ function drawWorld() {
       var x = Math.floor(col * TILE - cameraX);
       var y = Math.floor(row * TILE - cameraY);
 
-      // Halber Wasserblock: nur die untere Hälfte des Tiles zeichnen
-      if (type === WATER_HALF) {
+      // Wasser: Höhe hängt vom Füll-Niveau ab (wLevel 1–8), immer von unten
+      if (type === WATER) {
+        var lvl = wLevel[row][col] || 8;                    // Füllstand (1–8)
+        var h   = Math.max(2, Math.round(lvl / 8 * TILE)); // Pixel-Höhe
+        var wy  = y + TILE - h;                             // Startpunkt von unten
         ctx.fillStyle = COLORS[WATER];
-        ctx.fillRect(x, y + TILE/2, TILE, TILE/2);         // untere Hälfte
-        ctx.fillStyle = "rgba(100,200,255,0.5)";
-        ctx.fillRect(x, y + TILE/2, TILE, 5);              // Wellenstreifen oben
-        continue;                                           // kein Rahmen nötig
+        ctx.fillRect(x, wy, TILE, h);
+        ctx.fillStyle = "rgba(100,200,255,0.4)";
+        ctx.fillRect(x, wy, TILE, Math.min(5, h));          // Wellen-Streifen oben
+        ctx.strokeStyle = "rgba(0,0,0,0.12)";
+        ctx.strokeRect(x + 0.5, wy + 0.5, TILE - 1, h - 1);
+        continue;
       }
 
       ctx.fillStyle = COLORS[type];
@@ -579,7 +609,6 @@ function drawWorld() {
       if (type === GRASS)  { ctx.fillStyle="rgba(144,224,80,1)";  ctx.fillRect(x,y,TILE,5); }
       if (type === STONE)  { ctx.fillStyle="rgba(255,255,255,0.07)"; ctx.fillRect(x+4,y+4,TILE-8,TILE-8); }
       if (type === LEAVES) { ctx.fillStyle="rgba(0,0,0,0.15)"; ctx.fillRect(x+5,y+5,9,9); ctx.fillRect(x+17,y+15,7,7); }
-      if (type === WATER)  { ctx.fillStyle="rgba(100,200,255,0.35)"; ctx.fillRect(x,y,TILE,8); ctx.fillRect(x,y+18,TILE,8); }
       ctx.strokeStyle = "rgba(0,0,0,0.12)";
       ctx.strokeRect(x+0.5, y+0.5, TILE-1, TILE-1);
     }
@@ -830,70 +859,106 @@ function drawGameOver() {
 }
 
 // ------------------------------------------------------------
-// updateWater: Wasser-Physik mit Niveau-Ausgleich
-// Schritt 1: fällt sofort zum tiefsten Punkt (jeden Frame)
-// Schritt 2: sucht waagerecht den tiefsten Ausweg → flache Oberfläche (alle 4 Frames)
+// updateWater: Wasser-Physik mit Füll-Niveau (wLevel 1–8)
+//
+// Jedes Wasser-Tile hat ein Füll-Niveau von 1 (Achtel) bis 8 (voll).
+// Schritt 1: Wasser fällt + füllt von unten auf (jeden Frame)
+// Schritt 2: Wasser gleicht Niveaus aus → gerade Oberfläche (alle 4 Frames)
+//   Unterschied ≥ 2 → 1 Einheit fließt zum niedrigeren Nachbarn
+//   Tiles mit Level 0 werden zu Luft, neue Tiles starten bei Level 1
 // ------------------------------------------------------------
 var waterTick = 0;
 
-// Merkt sich welche Wasser-Tiles schon diesen Tick bewegt wurden
-// (damit sich kein Wasser zweimal pro Tick verschiebt → kein Vermehren)
+// Merkt sich welche Tiles schon diesen Tick bewegt wurden (verhindert Doppel-Bewegung)
 var waterMoved = [];
-for (var _r = 0; _r < WORLD_ROWS; _r++) {
-  waterMoved[_r] = [];
-  for (var _c = 0; _c < WORLD_COLS; _c++) waterMoved[_r][_c] = false;
+for (var _r2 = 0; _r2 < WORLD_ROWS; _r2++) {
+  waterMoved[_r2] = [];
+  for (var _c2 = 0; _c2 < WORLD_COLS; _c2++) waterMoved[_r2][_c2] = false;
+}
+
+// Hilfsfunktion: entfernt Wasser aus einer Zelle
+function removeWater(r, c) {
+  world[r][c]  = AIR;
+  wLevel[r][c] = 0;
+}
+
+// Hilfsfunktion: fügt Wasser zu einer Zelle hinzu (erzeugt sie falls nötig)
+// Gibt zurück wie viel tatsächlich hinzugefügt wurde
+function addWater(r, c, amount) {
+  if (world[r][c] === AIR) {
+    world[r][c]  = WATER;
+    wLevel[r][c] = 0;
+  }
+  var space = 8 - wLevel[r][c];
+  var added  = Math.min(space, amount);
+  wLevel[r][c] += added;
+  return added;
 }
 
 function updateWater() {
   waterTick++;
 
-  // --- Schritt 1: Fallen (jeden Frame, von unten nach oben) ---
+  // ── Schritt 1: Fallen (jeden Frame, von unten nach oben) ─────────────────
+  // Wasser fällt nach unten und füllt Tiles von unten auf
   for (var row = WORLD_ROWS - 2; row >= 0; row--) {
     for (var col = 1; col < WORLD_COLS - 1; col++) {
       if (world[row][col] !== WATER) continue;
-      if (world[row + 1][col] !== AIR) continue;
+      var L = wLevel[row][col];
+      if (L <= 0) { removeWater(row, col); continue; }
 
-      // Tiefsten Luft-Block direkt darunter suchen
-      var deepest = row + 1;
-      while (deepest + 1 < WORLD_ROWS - 1 && world[deepest + 1][col] === AIR) deepest++;
-      world[row][col]     = AIR;
-      world[deepest][col] = WATER;
+      // Wenn das Tile darunter nicht voll ist → Wasser hineinfüllen
+      if (world[row + 1][col] === WATER && wLevel[row + 1][col] < 8) {
+        var moved = addWater(row + 1, col, L);
+        wLevel[row][col] -= moved;
+        if (wLevel[row][col] <= 0) { removeWater(row, col); continue; }
+        L = wLevel[row][col];
+      }
+
+      // Wenn das Tile darunter Luft ist → zum tiefsten Punkt fallen
+      if (world[row + 1][col] === AIR) {
+        var deepest = row + 1;
+        while (deepest + 1 < WORLD_ROWS - 1 && world[deepest + 1][col] === AIR) deepest++;
+        // Tiefste Position: evtl. nicht-volles Wasser darunter auffüllen
+        if (world[deepest][col] === WATER && wLevel[deepest][col] < 8) {
+          var moved2 = addWater(deepest, col, L);
+          wLevel[row][col] -= moved2;
+          if (wLevel[row][col] <= 0) removeWater(row, col);
+        } else if (world[deepest][col] === AIR) {
+          removeWater(row, col);
+          world[deepest][col]  = WATER;
+          wLevel[deepest][col] = L;
+        }
+      }
     }
   }
 
-  // --- Schritt 2: Niveau ausgleichen (nur alle 4 Frames) ---
+  // ── Schritt 2: Niveau ausgleichen (alle 4 Frames) ────────────────────────
+  // Wasser fließt zum tiefsten erreichbaren Punkt → flache Oberfläche
   if (waterTick % 4 !== 0) return;
 
-  // moved-Tabelle zurücksetzen
   for (var r = 0; r < WORLD_ROWS; r++)
     for (var c = 0; c < WORLD_COLS; c++)
       waterMoved[r][c] = false;
 
-  // Wie weit schaut Wasser nach links/rechts nach einem "Abgrund"?
-  var MAX_SCAN = 16;
+  var MAX_SCAN = 16;  // wie weit schaut Wasser nach links/rechts?
 
-  // Von unten nach oben → tiefer liegendes Wasser hat Vorrang
   for (var row = WORLD_ROWS - 2; row >= 0; row--) {
     for (var col = 1; col < WORLD_COLS - 1; col++) {
       if (world[row][col] !== WATER) continue;
-      if (waterMoved[row][col]) continue;        // schon bewegt, überspringen
-      if (world[row + 1][col] === AIR) continue; // fällt noch → Schritt 1 macht das
+      if (waterMoved[row][col]) continue;          // schon diesen Tick bewegt
+      if (world[row + 1][col] === AIR) continue;   // fällt noch → Schritt 1
 
-      // Suche links und rechts einen "Abgrund":
-      // Eine Stelle, wo das Boden-Tile fehlt (Luft darunter) →
-      // dort könnte Wasser eine Zeile tiefer fließen → Niveau sinkt
-      var leftDrop  = -1;  // Entfernung zum nächsten Abgrund links  (-1 = keiner)
-      var rightDrop = -1;  // Entfernung zum nächsten Abgrund rechts
+      var L = wLevel[row][col];
+      if (L <= 0) { removeWater(row, col); continue; }
 
-      // Links scannen: solange Luft auf gleicher Höhe, nach Abgrund suchen
+      // Abgrund suchen (Stelle wo Wasser tiefer fallen könnte)
+      var leftDrop = -1, rightDrop = -1;
       for (var dc = 1; dc <= MAX_SCAN; dc++) {
         var sc = col - dc;
         if (sc < 1) break;
-        if (world[row][sc] !== AIR) break;            // Weg durch Wand/Wasser blockiert
-        if (world[row + 1][sc] === AIR) { leftDrop = dc; break; }  // Abgrund gefunden!
+        if (world[row][sc] !== AIR) break;          // Weg blockiert
+        if (world[row + 1][sc] === AIR) { leftDrop = dc; break; }
       }
-
-      // Rechts scannen
       for (var dc = 1; dc <= MAX_SCAN; dc++) {
         var sc = col + dc;
         if (sc >= WORLD_COLS - 1) break;
@@ -901,31 +966,37 @@ function updateWater() {
         if (world[row + 1][sc] === AIR) { rightDrop = dc; break; }
       }
 
+      // Füll-Niveau der direkten Nachbarn (999 = durch Wand blockiert)
+      var leftL  = (world[row][col - 1] === WATER) ? wLevel[row][col - 1]
+                 : (world[row][col - 1] === AIR   ? 0 : 999);
+      var rightL = (world[row][col + 1] === WATER) ? wLevel[row][col + 1]
+                 : (world[row][col + 1] === AIR   ? 0 : 999);
+
       var flowDir = 0;
 
       if (leftDrop !== -1 || rightDrop !== -1) {
-        // Abgrund gefunden → zum näheren Abgrund fließen (Wasser sucht den tiefsten Weg)
+        // Abgrund in Reichweite → dorthin fließen
         if      (leftDrop  !== -1 && rightDrop === -1) flowDir = -1;
         else if (rightDrop !== -1 && leftDrop  === -1) flowDir =  1;
         else    flowDir = (leftDrop <= rightDrop) ? -1 : 1;
-      } else {
-        // Kein Abgrund erreichbar → einfach in freie Richtung ausbreiten
-        var leftFree  = col > 1            && world[row][col - 1] === AIR;
-        var rightFree = col < WORLD_COLS-2 && world[row][col + 1] === AIR;
 
-        if      (leftFree && rightFree) flowDir = ((col + waterTick) % 2 === 0) ? -1 : 1;
-        else if (leftFree)              flowDir = -1;
-        else if (rightFree)             flowDir =  1;
+      } else {
+        // Kein Abgrund → Niveau mit direktem Nachbarn ausgleichen
+        // (fließt nur wenn Unterschied ≥ 2, damit kein endloses Hin-und-Her)
+        var canLeft  = leftL  !== 999 && leftL  <= L - 2;
+        var canRight = rightL !== 999 && rightL <= L - 2;
+        if      (canLeft  && canRight) flowDir = (leftL <= rightL) ? -1 : 1;
+        else if (canLeft)              flowDir = -1;
+        else if (canRight)             flowDir =  1;
       }
 
-      // Einen Schritt in die gewählte Richtung bewegen
       if (flowDir !== 0) {
-        var nextCol = col + flowDir;
-        if (world[row][nextCol] === AIR) {
-          world[row][col]          = AIR;
-          world[row][nextCol]      = WATER;
-          waterMoved[row][nextCol] = true;  // nicht nochmal bewegen diesen Tick
-        }
+        var nc = col + flowDir;
+        // 1 Einheit in die Zielrichtung transferieren
+        wLevel[row][col] -= 1;
+        addWater(row, nc, 1);
+        waterMoved[row][nc] = true;
+        if (wLevel[row][col] <= 0) removeWater(row, col);
       }
     }
   }
