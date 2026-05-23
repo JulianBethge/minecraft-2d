@@ -140,6 +140,42 @@ NAMES[WOOD]   = "Holz";
 NAMES[LEAVES] = "Blätter";
 
 // ------------------------------------------------------------
+// Aktuell ausgewählter Block zum Setzen (1=Holz, 2=Stein, 3=Erde)
+// ------------------------------------------------------------
+var selectedBlock = WOOD;
+
+// Taste 1/2/3 → Block auswählen
+document.addEventListener("keydown", function(e) {
+  if (e.key === "1") selectedBlock = WOOD;
+  if (e.key === "2") selectedBlock = STONE;
+  if (e.key === "3") selectedBlock = DIRT;
+});
+
+// Rechtsklick = Block setzen
+canvas.addEventListener("contextmenu", function(e) {
+  e.preventDefault();
+  if (!mouse.inRange) return;
+
+  // Nur auf Luft setzen
+  if (getTile(mouse.col, mouse.row) !== AIR) return;
+
+  // Nicht setzen, wenn der Spieler dieses Tile gerade besetzt
+  var playerColLeft  = Math.floor(player.x / TILE);
+  var playerColRight = Math.floor((player.x + player.width  - 1) / TILE);
+  var playerRowTop   = Math.floor(player.y / TILE);
+  var playerRowBot   = Math.floor((player.y + player.height - 1) / TILE);
+  var inPlayer = mouse.col >= playerColLeft && mouse.col <= playerColRight &&
+                 mouse.row >= playerRowTop  && mouse.row <= playerRowBot;
+  if (inPlayer) return;
+
+  // Nur setzen wenn genug im Inventar
+  if (inventory[selectedBlock] <= 0) return;
+
+  world[mouse.row][mouse.col] = selectedBlock;
+  inventory[selectedBlock]--;
+});
+
+// ------------------------------------------------------------
 // isSolid: Welche Blöcke stoppen den Spieler?
 // Wasser und Luft sind nicht fest.
 // ------------------------------------------------------------
@@ -358,6 +394,53 @@ function drawInventory() {
 }
 
 // ------------------------------------------------------------
+// drawHotbar: Zeigt unten die 3 platzierbaren Blöcke + Auswahl
+// ------------------------------------------------------------
+function drawHotbar() {
+  var slots   = [WOOD, STONE, DIRT];
+  var labels  = ["1", "2", "3"];
+  var size    = 36;   // Slot-Größe
+  var gap     = 6;
+  var total   = slots.length * (size + gap) - gap;
+  var startX  = Math.floor((canvas.width - total) / 2);
+  var y       = canvas.height - size - 8;
+
+  for (var i = 0; i < slots.length; i++) {
+    var type = slots[i];
+    var x    = startX + i * (size + gap);
+
+    // Hintergrund des Slots
+    ctx.fillStyle = (type === selectedBlock)
+      ? "rgba(255,255,255,0.35)"   // ausgewählt = heller
+      : "rgba(0,0,0,0.45)";
+    ctx.fillRect(x, y, size, size);
+
+    // Block-Farbe
+    ctx.fillStyle = COLORS[type];
+    ctx.fillRect(x + 4, y + 4, size - 8, size - 8);
+
+    // Auswahl-Rahmen
+    if (type === selectedBlock) {
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth   = 2;
+      ctx.strokeRect(x + 1, y + 1, size - 2, size - 2);
+      ctx.lineWidth = 1;
+    }
+
+    // Tastenbezeichnung oben links
+    ctx.fillStyle = "#fff";
+    ctx.font      = "bold 10px monospace";
+    ctx.fillText(labels[i], x + 4, y + 12);
+
+    // Inventar-Anzahl unten rechts
+    var count = inventory[type];
+    ctx.fillStyle = count > 0 ? "#fff" : "#f66";
+    ctx.font      = "11px monospace";
+    ctx.fillText(count, x + size - 14, y + size - 4);
+  }
+}
+
+// ------------------------------------------------------------
 // Game Loop
 // ------------------------------------------------------------
 function gameLoop() {
@@ -365,7 +448,8 @@ function gameLoop() {
   drawWorld();
   drawTarget();
   drawPlayer();
-  drawInventory();  // immer zuletzt, damit es über allem liegt
+  drawInventory();
+  drawHotbar();
   update();
   requestAnimationFrame(gameLoop);
 }
