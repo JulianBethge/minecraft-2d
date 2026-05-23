@@ -19,12 +19,12 @@ var REACH      = 4;    // Reichweite in Tiles
 // ------------------------------------------------------------
 // Block-Typen
 // ------------------------------------------------------------
-var AIR = 0, GRASS = 1, DIRT = 2, STONE = 3, WOOD = 4, LEAVES = 5, WATER = 6;
+var AIR = 0, GRASS = 1, DIRT = 2, STONE = 3, WOOD = 4, LEAVES = 5, WATER = 6, WATER_HALF = 7;
 
 var COLORS = {};
 COLORS[GRASS]  = "#6ab04c"; COLORS[DIRT]   = "#9b5e28";
 COLORS[STONE]  = "#808080"; COLORS[WOOD]   = "#7a5230";
-COLORS[LEAVES] = "#2e8b2e"; COLORS[WATER]  = "#2980b9";
+COLORS[LEAVES] = "#2e8b2e"; COLORS[WATER]  = "#2980b9"; COLORS[WATER_HALF] = "#2980b9";
 
 var NAMES = {};
 NAMES[GRASS]  = "Gras";  NAMES[DIRT]   = "Erde";
@@ -292,7 +292,7 @@ canvas.addEventListener("click", function(e) {
     // Block abbauen
     if (!mouse.inRange) return;
     var type = getTile(mouse.col, mouse.row);
-    if (type !== AIR && type !== WATER) {
+    if (type !== AIR && type !== WATER && type !== WATER_HALF) {
       world[mouse.row][mouse.col] = AIR;
       if (inventory[type] !== undefined) inventory[type]++;
     }
@@ -304,7 +304,8 @@ canvas.addEventListener("contextmenu", function(e) {
   e.preventDefault();
   if (player.dead) return;
   if (!mouse.inRange) return;
-  if (getTile(mouse.col, mouse.row) !== AIR) return;
+  var placeTarget = getTile(mouse.col, mouse.row);
+  if (placeTarget !== AIR && placeTarget !== WATER_HALF) return;
   if (inventory[selectedBlock] <= 0) return;
   var pCL = Math.floor(player.x / TILE);
   var pCR = Math.floor((player.x + player.width  - 1) / TILE);
@@ -564,6 +565,15 @@ function drawWorld() {
       var x = Math.floor(col * TILE - cameraX);
       var y = Math.floor(row * TILE - cameraY);
 
+      // Halber Wasserblock: nur die untere Hälfte des Tiles zeichnen
+      if (type === WATER_HALF) {
+        ctx.fillStyle = COLORS[WATER];
+        ctx.fillRect(x, y + TILE/2, TILE, TILE/2);         // untere Hälfte
+        ctx.fillStyle = "rgba(100,200,255,0.5)";
+        ctx.fillRect(x, y + TILE/2, TILE, 5);              // Wellenstreifen oben
+        continue;                                           // kein Rahmen nötig
+      }
+
       ctx.fillStyle = COLORS[type];
       ctx.fillRect(x, y, TILE, TILE);
       if (type === GRASS)  { ctx.fillStyle="rgba(144,224,80,1)";  ctx.fillRect(x,y,TILE,5); }
@@ -820,10 +830,19 @@ function drawGameOver() {
 }
 
 // ------------------------------------------------------------
-// updateWater: Wasser fällt nach unten und breitet sich seitlich aus
-// Tick-Rate: Schritt 1 (fallen) jeden Frame, Schritt 2 (fließen) alle 4 Frames
+// updateWater: Wasser-Physik mit Niveau-Ausgleich
+// Schritt 1: fällt sofort zum tiefsten Punkt (jeden Frame)
+// Schritt 2: sucht waagerecht den tiefsten Ausweg → flache Oberfläche (alle 4 Frames)
 // ------------------------------------------------------------
 var waterTick = 0;
+
+// Merkt sich welche Wasser-Tiles schon diesen Tick bewegt wurden
+// (damit sich kein Wasser zweimal pro Tick verschiebt → kein Vermehren)
+var waterMoved = [];
+for (var _r = 0; _r < WORLD_ROWS; _r++) {
+  waterMoved[_r] = [];
+  for (var _c = 0; _c < WORLD_COLS; _c++) waterMoved[_r][_c] = false;
+}
 
 function updateWater() {
   waterTick++;
@@ -832,46 +851,81 @@ function updateWater() {
   for (var row = WORLD_ROWS - 2; row >= 0; row--) {
     for (var col = 1; col < WORLD_COLS - 1; col++) {
       if (world[row][col] !== WATER) continue;
-      if (world[row + 1][col] !== AIR)  continue;
+      if (world[row + 1][col] !== AIR) continue;
 
-      // Tiefsten Luft-Block darunter suchen
+      // Tiefsten Luft-Block direkt darunter suchen
       var deepest = row + 1;
-      while (deepest + 1 < WORLD_ROWS - 1 && world[deepest + 1][col] === AIR) {
-        deepest++;
-      }
+      while (deepest + 1 < WORLD_ROWS - 1 && world[deepest + 1][col] === AIR) deepest++;
       world[row][col]     = AIR;
       world[deepest][col] = WATER;
     }
   }
 
-  // --- Schritt 2: Seitlich fließen (nur alle 4 Frames) ---
+  // --- Schritt 2: Niveau ausgleichen (nur alle 4 Frames) ---
   if (waterTick % 4 !== 0) return;
 
-  // Von unten nach oben, damit tiefer liegendes Wasser zuerst fließt
+  // moved-Tabelle zurücksetzen
+  for (var r = 0; r < WORLD_ROWS; r++)
+    for (var c = 0; c < WORLD_COLS; c++)
+      waterMoved[r][c] = false;
+
+  // Wie weit schaut Wasser nach links/rechts nach einem "Abgrund"?
+  var MAX_SCAN = 16;
+
+  // Von unten nach oben → tiefer liegendes Wasser hat Vorrang
   for (var row = WORLD_ROWS - 2; row >= 0; row--) {
     for (var col = 1; col < WORLD_COLS - 1; col++) {
       if (world[row][col] !== WATER) continue;
-      // Nur fließen wenn kein Fall mehr möglich
-      if (world[row + 1][col] === AIR)  continue;
+      if (waterMoved[row][col]) continue;        // schon bewegt, überspringen
+      if (world[row + 1][col] === AIR) continue; // fällt noch → Schritt 1 macht das
 
-      var leftFree  = col > 1            && world[row][col - 1] === AIR;
-      var rightFree = col < WORLD_COLS-2 && world[row][col + 1] === AIR;
+      // Suche links und rechts einen "Abgrund":
+      // Eine Stelle, wo das Boden-Tile fehlt (Luft darunter) →
+      // dort könnte Wasser eine Zeile tiefer fließen → Niveau sinkt
+      var leftDrop  = -1;  // Entfernung zum nächsten Abgrund links  (-1 = keiner)
+      var rightDrop = -1;  // Entfernung zum nächsten Abgrund rechts
 
-      if (leftFree && rightFree) {
-        // Beide Seiten frei → abwechselnd links oder rechts fließen
-        // (nie das Original behalten + neue erstellen → kein Vermehren)
-        world[row][col] = AIR;
-        if ((col + waterTick) % 2 === 0) {
-          world[row][col - 1] = WATER;
-        } else {
-          world[row][col + 1] = WATER;
+      // Links scannen: solange Luft auf gleicher Höhe, nach Abgrund suchen
+      for (var dc = 1; dc <= MAX_SCAN; dc++) {
+        var sc = col - dc;
+        if (sc < 1) break;
+        if (world[row][sc] !== AIR) break;            // Weg durch Wand/Wasser blockiert
+        if (world[row + 1][sc] === AIR) { leftDrop = dc; break; }  // Abgrund gefunden!
+      }
+
+      // Rechts scannen
+      for (var dc = 1; dc <= MAX_SCAN; dc++) {
+        var sc = col + dc;
+        if (sc >= WORLD_COLS - 1) break;
+        if (world[row][sc] !== AIR) break;
+        if (world[row + 1][sc] === AIR) { rightDrop = dc; break; }
+      }
+
+      var flowDir = 0;
+
+      if (leftDrop !== -1 || rightDrop !== -1) {
+        // Abgrund gefunden → zum näheren Abgrund fließen (Wasser sucht den tiefsten Weg)
+        if      (leftDrop  !== -1 && rightDrop === -1) flowDir = -1;
+        else if (rightDrop !== -1 && leftDrop  === -1) flowDir =  1;
+        else    flowDir = (leftDrop <= rightDrop) ? -1 : 1;
+      } else {
+        // Kein Abgrund erreichbar → einfach in freie Richtung ausbreiten
+        var leftFree  = col > 1            && world[row][col - 1] === AIR;
+        var rightFree = col < WORLD_COLS-2 && world[row][col + 1] === AIR;
+
+        if      (leftFree && rightFree) flowDir = ((col + waterTick) % 2 === 0) ? -1 : 1;
+        else if (leftFree)              flowDir = -1;
+        else if (rightFree)             flowDir =  1;
+      }
+
+      // Einen Schritt in die gewählte Richtung bewegen
+      if (flowDir !== 0) {
+        var nextCol = col + flowDir;
+        if (world[row][nextCol] === AIR) {
+          world[row][col]          = AIR;
+          world[row][nextCol]      = WATER;
+          waterMoved[row][nextCol] = true;  // nicht nochmal bewegen diesen Tick
         }
-      } else if (leftFree) {
-        world[row][col]     = AIR;
-        world[row][col - 1] = WATER;
-      } else if (rightFree) {
-        world[row][col]     = AIR;
-        world[row][col + 1] = WATER;
       }
     }
   }
