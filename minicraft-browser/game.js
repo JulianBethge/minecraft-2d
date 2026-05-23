@@ -167,7 +167,7 @@ updateCamera();
 // Zombies
 // ------------------------------------------------------------
 var zombies          = [];
-var MAX_ZOMBIES      = 7;
+var MAX_ZOMBIES      = 20;
 var zombieSpawnTimer = Date.now();
 
 function spawnZombie() {
@@ -195,8 +195,8 @@ function spawnZombie() {
   }
 }
 
-// Beim Start 3 Zombies spawnen
-for (var z = 0; z < 3; z++) spawnZombie();
+// Beim Start 6 Zombies spawnen
+for (var z = 0; z < 6; z++) spawnZombie();
 
 // ------------------------------------------------------------
 // Inventar + Block-Auswahl
@@ -393,7 +393,30 @@ function update() {
 
     if (distPX < 320) {
       z.dir = (zCX < pCX) ? 1 : -1;
-      z.x  += z.dir * 1.5;
+
+      // Horizontale Bewegung mit Wandkollision
+      var zStep = z.dir * 1.5;
+      z.x += zStep;
+
+      // Welche Zeilen belegt der Zombie (oben und unten)?
+      var zRowTop = Math.floor(z.y / TILE);
+      var zRowBot = Math.floor((z.y + z.height - 1) / TILE);
+
+      if (z.dir > 0) {
+        // nach rechts: rechte Kante prüfen
+        var wallCol = Math.floor((z.x + z.width - 1) / TILE);
+        if (isSolid(getTile(wallCol, zRowTop)) || isSolid(getTile(wallCol, zRowBot))) {
+          z.x   = wallCol * TILE - z.width; // an Wand einrasten
+          z.dir = -1;                        // umdrehen
+        }
+      } else {
+        // nach links: linke Kante prüfen
+        var wallCol = Math.floor(z.x / TILE);
+        if (isSolid(getTile(wallCol, zRowTop)) || isSolid(getTile(wallCol, zRowBot))) {
+          z.x   = (wallCol + 1) * TILE;     // an Wand einrasten
+          z.dir = 1;                         // umdrehen
+        }
+      }
     }
 
     // Zombie-Schwerkraft
@@ -422,8 +445,8 @@ function update() {
     }
   }
 
-  // --- Neuen Zombie spawnen (alle 8 Sek, max 7) ---
-  if (zombies.length < MAX_ZOMBIES && Date.now() - zombieSpawnTimer > 8000) {
+  // --- Neuen Zombie spawnen (alle 3 Sek, max 20) ---
+  if (zombies.length < MAX_ZOMBIES && Date.now() - zombieSpawnTimer > 3000) {
     spawnZombie();
     zombieSpawnTimer = Date.now();
   }
