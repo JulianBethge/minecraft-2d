@@ -1,0 +1,23 @@
+/* Seite: dunkler Hintergrund, alles zentriert */
+body {
+  background-color: #1a1a2e;
+  color: #eee;
+  font-family: monospace;
+  text-align: center;
+  margin: 0;
+  padding: 20px;
+}
+
+h1 {
+  color: #7ec8e3;
+  margin-bottom: 12px;
+}
+
+/* Der Canvas bekommt einen sichtbaren Rahmen */
+#gameCanvas {
+  border: 3px solid #7ec8e3;
+  display: block;
+  margin: 0 auto;
+  /* Kein Textcursor, wenn man auf den Canvas klickt */
+  cursor: crosshair;
+}
