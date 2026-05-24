@@ -161,7 +161,8 @@ var player = {
   lastRegen:     Date.now(),
   dead:          false,
   swingTimer:    0,       // Zeitpunkt des letzten Angriffs (ms)
-  swingDuration: 250      // wie lange die Schwinganimation dauert (ms)
+  swingDuration: 250,     // wie lange die Schwinganimation dauert (ms)
+  facing:        1        // Blickrichtung: 1 = rechts, -1 = links
 };
 
 // ------------------------------------------------------------
@@ -370,6 +371,9 @@ function update() {
   if (keys["d"]) dx =  SPEED;
   player.x += dx;
 
+  // Blickrichtung immer zur Maus hin (damit das Schwert korrekt schwingt)
+  player.facing = (mouse.worldX >= player.x + player.width / 2) ? 1 : -1;
+
   if (dx !== 0) {
     var rT = Math.floor(player.y / TILE);
     var rB = Math.floor((player.y + player.height - 1) / TILE);
@@ -542,16 +546,47 @@ function update() {
       player.y         = z.y - player.height;
       player.velocityY = 0;
       player.onGround  = true;
+
+      // Decke direkt über dem Spieler prüfen (falls Zombie unter Decke steht)
+      var pcL = Math.floor(player.x / TILE);
+      var pcR = Math.floor((player.x + player.width - 1) / TILE);
+      var prt = Math.floor(player.y / TILE);
+      if (isSolid(getTile(pcL, prt)) || isSolid(getTile(pcR, prt))) {
+        player.y = (prt + 1) * TILE;
+      }
+
     } else if (minP === pushU && player.velocityY <= 0) {
       // Spieler springt von unten gegen den Zombie → Sprung gestoppt
       player.y         = z.y + z.height;
       player.velocityY = 0;
+
+      // Boden unter dem Spieler prüfen
+      var pcL = Math.floor(player.x / TILE);
+      var pcR = Math.floor((player.x + player.width - 1) / TILE);
+      var prb = Math.floor((player.y + player.height) / TILE);
+      if (isSolid(getTile(pcL, prb)) || isSolid(getTile(pcR, prb))) {
+        player.y = prb * TILE - player.height;
+        player.velocityY = 0;
+        player.onGround  = true;
+      }
+
     } else if (minP === pushL) {
-      // Zombie blockiert rechte Seite des Spielers
+      // Zombie schiebt Spieler nach links → Wand links prüfen
       player.x = z.x - player.width;
+      var prT = Math.floor(player.y / TILE);
+      var prB = Math.floor((player.y + player.height - 1) / TILE);
+      var pcL = Math.floor(player.x / TILE);
+      if (isSolid(getTile(pcL, prT)) || isSolid(getTile(pcL, prB)))
+        player.x = (pcL + 1) * TILE;  // Wand stoppt Spieler
+
     } else {
-      // Zombie blockiert linke Seite des Spielers
+      // Zombie schiebt Spieler nach rechts → Wand rechts prüfen
       player.x = z.x + z.width;
+      var prT = Math.floor(player.y / TILE);
+      var prB = Math.floor((player.y + player.height - 1) / TILE);
+      var pcR = Math.floor((player.x + player.width - 1) / TILE);
+      if (isSolid(getTile(pcR, prT)) || isSolid(getTile(pcR, prB)))
+        player.x = pcR * TILE - player.width;  // Wand stoppt Spieler
     }
 
     // Weltgrenzen nach Verschiebung einhalten
@@ -640,18 +675,26 @@ function drawPlayer() {
   // Kopf
   ctx.fillStyle = "#f5d88a";
   ctx.fillRect(px+4, py, 20, 20);
-  // Augen
+  // Augen: je nach Blickrichtung auf der richtigen Seite
   ctx.fillStyle = "#333";
-  ctx.fillRect(px+7, py+6, 4, 4);
-  ctx.fillRect(px+15, py+6, 4, 4);
+  if (player.facing >= 0) {
+    // Schaut nach rechts
+    ctx.fillRect(px+7,  py+6, 4, 4);
+    ctx.fillRect(px+15, py+6, 4, 4);
+  } else {
+    // Schaut nach links (gespiegelt)
+    ctx.fillRect(px+9,  py+6, 4, 4);
+    ctx.fillRect(px+17, py+6, 4, 4);
+  }
 
   // --- Schwertanimation ---
   // Fortschritt: 0 = Angriff gerade gestartet, 1 = fertig
   var elapsed  = Date.now() - player.swingTimer;
   var progress = Math.min(1, elapsed / player.swingDuration);
 
-  // Drehpunkt: rechte Schulter des Spielers
-  var pivotX = px + player.width + 2;
+  // Drehpunkt: Schulter auf der Seite, in die der Spieler schaut
+  var facingRight = (player.facing >= 0);
+  var pivotX = facingRight ? px + player.width + 2 : px - 2;
   var pivotY = py + 26;
 
   // Winkel: von -100° (Schwert oben) bis +50° (Schwert unten)
@@ -667,20 +710,23 @@ function drawPlayer() {
   // Halbtransparenter Schwungbogen während der Animation
   if (progress < 1) {
     ctx.save();
+    ctx.translate(pivotX, pivotY);
+    if (!facingRight) ctx.scale(-1, 1);  // nach links spiegeln
     ctx.strokeStyle = "rgba(255,255,255,0.25)";
     ctx.lineWidth   = 8;
     ctx.lineCap     = "round";
     ctx.beginPath();
-    ctx.arc(pivotX, pivotY, 20, startAngle, angle);
+    ctx.arc(0, 0, 20, startAngle, angle);
     ctx.stroke();
     ctx.lineWidth = 1;
     ctx.lineCap   = "butt";
     ctx.restore();
   }
 
-  // Schwert zeichnen (rotiert um den Drehpunkt)
+  // Schwert zeichnen (rotiert um den Drehpunkt, gespiegelt wenn links)
   ctx.save();
   ctx.translate(pivotX, pivotY);
+  if (!facingRight) ctx.scale(-1, 1);  // nach links spiegeln
   ctx.rotate(angle);
 
   // Klinge (lang, hellgrau, vom Drehpunkt nach rechts)
@@ -973,9 +1019,10 @@ function updateWater() {
                  : (world[row][col + 1] === AIR   ? 0 : 999);
 
       var flowDir = 0;
+      var flowAmount = 1; // Wie viel Wasser fließt pro Tick
 
       if (leftDrop !== -1 || rightDrop !== -1) {
-        // Abgrund in Reichweite → dorthin fließen
+        // Abgrund in Reichweite → dorthin fließen (immer 1 Einheit)
         if      (leftDrop  !== -1 && rightDrop === -1) flowDir = -1;
         else if (rightDrop !== -1 && leftDrop  === -1) flowDir =  1;
         else    flowDir = (leftDrop <= rightDrop) ? -1 : 1;
@@ -988,13 +1035,20 @@ function updateWater() {
         if      (canLeft  && canRight) flowDir = (leftL <= rightL) ? -1 : 1;
         else if (canLeft)              flowDir = -1;
         else if (canRight)             flowDir =  1;
+
+        // Halbe Differenz übertragen → große Abstände schließen in 1 Tick,
+        // kein Hin-und-Her weil bei Diff=2 → floor(1)=1 → ausgeglichen
+        if (flowDir !== 0) {
+          var neighborL = (flowDir === -1) ? leftL : rightL;
+          flowAmount = Math.floor((L - neighborL) / 2);
+          if (flowAmount < 1) flowAmount = 1;
+        }
       }
 
       if (flowDir !== 0) {
         var nc = col + flowDir;
-        // 1 Einheit in die Zielrichtung transferieren
-        wLevel[row][col] -= 1;
-        addWater(row, nc, 1);
+        wLevel[row][col] -= flowAmount;
+        addWater(row, nc, flowAmount);
         waterMoved[row][nc] = true;
         if (wLevel[row][col] <= 0) removeWater(row, col);
       }
