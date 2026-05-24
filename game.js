@@ -978,79 +978,52 @@ function updateWater() {
     }
   }
 
-  // ── Schritt 2: Niveau ausgleichen (alle 4 Frames) ────────────────────────
-  // Wasser fließt zum tiefsten erreichbaren Punkt → flache Oberfläche
+  // ── Schritt 2: Niveau ausgleichen (alle 4 Frames, 8 Durchläufe) ─────────────
+  // Wasser gleicht sich mit direkten Nachbarn aus → flache Oberfläche
+  // 8 Durchläufe pro Tick → Wasser kann bis zu 8 Tiles weit pro Tick fließen
   if (waterTick % 4 !== 0) return;
 
-  for (var r = 0; r < WORLD_ROWS; r++)
-    for (var c = 0; c < WORLD_COLS; c++)
-      waterMoved[r][c] = false;
+  for (var pass = 0; pass < 8; pass++) {
+    // Bewegungs-Merker zurücksetzen (jeder Durchlauf ist unabhängig)
+    for (var r = 0; r < WORLD_ROWS; r++)
+      for (var c = 0; c < WORLD_COLS; c++)
+        waterMoved[r][c] = false;
 
-  var MAX_SCAN = 16;  // wie weit schaut Wasser nach links/rechts?
+    for (var row = WORLD_ROWS - 2; row >= 0; row--) {
+      for (var col = 1; col < WORLD_COLS - 1; col++) {
+        if (world[row][col] !== WATER) continue;
+        if (waterMoved[row][col]) continue;        // schon in diesem Durchlauf bewegt
+        if (world[row + 1][col] === AIR) continue; // fällt noch → Schritt 1 kümmert sich
 
-  for (var row = WORLD_ROWS - 2; row >= 0; row--) {
-    for (var col = 1; col < WORLD_COLS - 1; col++) {
-      if (world[row][col] !== WATER) continue;
-      if (waterMoved[row][col]) continue;          // schon diesen Tick bewegt
-      if (world[row + 1][col] === AIR) continue;   // fällt noch → Schritt 1
+        var L = wLevel[row][col];
+        if (L <= 0) { removeWater(row, col); continue; }
 
-      var L = wLevel[row][col];
-      if (L <= 0) { removeWater(row, col); continue; }
+        // Füll-Niveau der direkten Nachbarn (999 = Wand blockiert)
+        var leftL  = (world[row][col - 1] === WATER) ? wLevel[row][col - 1]
+                   : (world[row][col - 1] === AIR   ? 0 : 999);
+        var rightL = (world[row][col + 1] === WATER) ? wLevel[row][col + 1]
+                   : (world[row][col + 1] === AIR   ? 0 : 999);
 
-      // Abgrund suchen (Stelle wo Wasser tiefer fallen könnte)
-      var leftDrop = -1, rightDrop = -1;
-      for (var dc = 1; dc <= MAX_SCAN; dc++) {
-        var sc = col - dc;
-        if (sc < 1) break;
-        if (world[row][sc] !== AIR) break;          // Weg blockiert
-        if (world[row + 1][sc] === AIR) { leftDrop = dc; break; }
-      }
-      for (var dc = 1; dc <= MAX_SCAN; dc++) {
-        var sc = col + dc;
-        if (sc >= WORLD_COLS - 1) break;
-        if (world[row][sc] !== AIR) break;
-        if (world[row + 1][sc] === AIR) { rightDrop = dc; break; }
-      }
-
-      // Füll-Niveau der direkten Nachbarn (999 = durch Wand blockiert)
-      var leftL  = (world[row][col - 1] === WATER) ? wLevel[row][col - 1]
-                 : (world[row][col - 1] === AIR   ? 0 : 999);
-      var rightL = (world[row][col + 1] === WATER) ? wLevel[row][col + 1]
-                 : (world[row][col + 1] === AIR   ? 0 : 999);
-
-      var flowDir = 0;
-      var flowAmount = 1; // Wie viel Wasser fließt pro Tick
-
-      if (leftDrop !== -1 || rightDrop !== -1) {
-        // Abgrund in Reichweite → dorthin fließen (immer 1 Einheit)
-        if      (leftDrop  !== -1 && rightDrop === -1) flowDir = -1;
-        else if (rightDrop !== -1 && leftDrop  === -1) flowDir =  1;
-        else    flowDir = (leftDrop <= rightDrop) ? -1 : 1;
-
-      } else {
-        // Kein Abgrund → Niveau mit direktem Nachbarn ausgleichen
-        // (fließt nur wenn Unterschied ≥ 2, damit kein endloses Hin-und-Her)
+        // Fließt nur wenn Unterschied ≥ 2 → kein ewiges Hin-und-Her
         var canLeft  = leftL  !== 999 && leftL  <= L - 2;
         var canRight = rightL !== 999 && rightL <= L - 2;
-        if      (canLeft  && canRight) flowDir = (leftL <= rightL) ? -1 : 1;
-        else if (canLeft)              flowDir = -1;
-        else if (canRight)             flowDir =  1;
 
-        // Halbe Differenz übertragen → große Abstände schließen in 1 Tick,
-        // kein Hin-und-Her weil bei Diff=2 → floor(1)=1 → ausgeglichen
+        var flowDir = 0;
+        if      (canLeft && canRight) flowDir = (leftL <= rightL) ? -1 : 1;
+        else if (canLeft)             flowDir = -1;
+        else if (canRight)            flowDir =  1;
+
         if (flowDir !== 0) {
+          var nc = col + flowDir;
           var neighborL = (flowDir === -1) ? leftL : rightL;
-          flowAmount = Math.floor((L - neighborL) / 2);
+          // Halbe Differenz übertragen → [8,0]→[4,4] in 1 Durchlauf, kein Hin-und-Her
+          var flowAmount = Math.floor((L - neighborL) / 2);
           if (flowAmount < 1) flowAmount = 1;
+          wLevel[row][col] -= flowAmount;
+          addWater(row, nc, flowAmount);
+          waterMoved[row][nc] = true;
+          if (wLevel[row][col] <= 0) removeWater(row, col);
         }
-      }
-
-      if (flowDir !== 0) {
-        var nc = col + flowDir;
-        wLevel[row][col] -= flowAmount;
-        addWater(row, nc, flowAmount);
-        waterMoved[row][nc] = true;
-        if (wLevel[row][col] <= 0) removeWater(row, col);
       }
     }
   }
