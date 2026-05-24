@@ -13,11 +13,116 @@ h1 {
   margin-bottom: 12px;
 }
 
+/* Wrapper: Canvas + Modus-Knopf liegen übereinander */
+#gameWrapper {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
 /* Der Canvas bekommt einen sichtbaren Rahmen */
 #gameCanvas {
   border: 3px solid #7ec8e3;
   display: block;
   margin: 0 auto;
-  /* Kein Textcursor, wenn man auf den Canvas klickt */
   cursor: crosshair;
+  /* Auf großen Bildschirmen: feste 640x480 */
+  max-width: 100%;
+  height: auto;
+}
+
+/* Standard: Handy-Elemente unsichtbar */
+.mobile-only {
+  display: none;
+}
+
+/* ───────────────────────────────────────────────────
+   HANDY-MODUS: Bildschirm schmal oder höher als breit
+   ─────────────────────────────────────────────────── */
+@media (max-width: 800px), (orientation: portrait) {
+  body {
+    padding: 6px;
+  }
+
+  h1 {
+    font-size: 18px;
+    margin: 6px 0;
+  }
+
+  #gameCanvas {
+    /* Canvas füllt die Bildschirmbreite */
+    width: 100%;
+    height: auto;
+    border-width: 2px;
+  }
+
+  /* Handy-Elemente sichtbar machen */
+  .mobile-only {
+    display: flex;
+  }
+
+  /* Modus-Knopf oben rechts auf dem Canvas */
+  #modeBtn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 54px;
+    height: 54px;
+    font-size: 26px;
+    background: rgba(0, 0, 0, 0.6);
+    border: 2px solid #7ec8e3;
+    border-radius: 8px;
+    color: #fff;
+    z-index: 10;
+    align-items: center;
+    justify-content: center;
+    /* Verhindert das blaue Tap-Highlight auf Mobile */
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+    user-select: none;
+  }
+
+  /* Steuerungsleiste unter dem Canvas */
+  #mobileControls {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 12px;
+    padding: 0 10px;
+  }
+
+  /* D-Pad links */
+  #dpad {
+    display: flex;
+    gap: 12px;
+  }
+
+  /* Alle Handy-Buttons gleicher Stil */
+  .mobBtn {
+    width: 72px;
+    height: 72px;
+    font-size: 32px;
+    background: rgba(0, 0, 0, 0.6);
+    border: 2px solid #7ec8e3;
+    border-radius: 12px;
+    color: #fff;
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    /* keine Auswahl beim langen Drücken */
+    -webkit-user-select: none;
+  }
+
+  /* Spring-Button etwas größer */
+  #btnJump {
+    width: 88px;
+    height: 88px;
+    font-size: 38px;
+  }
+
+  /* Visuelles Feedback wenn gedrückt */
+  .mobBtn:active,
+  #modeBtn:active {
+    background: rgba(126, 200, 227, 0.4);
+  }
 }

@@ -241,6 +241,19 @@ inventory[WOOD]  = 0; inventory[LEAVES] = 0;
 var selectedBlock = WOOD;
 
 // ------------------------------------------------------------
+// Handy-Erkennung
+// ------------------------------------------------------------
+// Wir gucken: ist der Bildschirm schmal, höher als breit oder gibt es Touch?
+function isMobile() {
+  return window.innerWidth <= 800
+      || window.innerHeight > window.innerWidth
+      || ("ontouchstart" in window);
+}
+
+// Modus auf dem Handy: "fight" = schlagen/abbauen, "build" = bauen
+var mobileMode = "fight";
+
+// ------------------------------------------------------------
 // Eingabe: Tasten
 // ------------------------------------------------------------
 var keys = {};
@@ -254,50 +267,72 @@ document.addEventListener("keydown", function(e) {
 document.addEventListener("keyup", function(e) { keys[e.key.toLowerCase()] = false; });
 
 // ------------------------------------------------------------
-// Eingabe: Maus
+// Eingabe: Maus / Touch
 // ------------------------------------------------------------
 var mouse = { x: 0, y: 0, worldX: 0, worldY: 0, col: 0, row: 0, inRange: false };
 
-canvas.addEventListener("mousemove", function(e) {
-  var rect     = canvas.getBoundingClientRect();
-  mouse.x      = e.clientX - rect.left;
-  mouse.y      = e.clientY - rect.top;
-  mouse.worldX = mouse.x + cameraX;
-  mouse.worldY = mouse.y + cameraY;
-  mouse.col    = Math.floor(mouse.worldX / TILE);
-  mouse.row    = Math.floor(mouse.worldY / TILE);
+// Klick/Touch-Position in Canvas-Koordinaten umrechnen
+// (wichtig wenn das Canvas per CSS skaliert ist, z.B. auf dem Handy)
+function getCanvasPos(e) {
+  var rect = canvas.getBoundingClientRect();
+  var scaleX = canvas.width  / rect.width;
+  var scaleY = canvas.height / rect.height;
+  var x = (e.clientX - rect.left) * scaleX;
+  var y = (e.clientY - rect.top)  * scaleY;
+  var wx = x + cameraX;
+  var wy = y + cameraY;
+  return {
+    x: x, y: y,
+    worldX: wx, worldY: wy,
+    col: Math.floor(wx / TILE),
+    row: Math.floor(wy / TILE)
+  };
+}
 
+// Ist diese Tile-Position in Spieler-Reichweite?
+function isPosInRange(col, row) {
   var px = player.x + player.width  / 2;
   var py = player.y + player.height / 2;
-  var tx = mouse.col * TILE + TILE / 2;
-  var ty = mouse.row * TILE + TILE / 2;
-  mouse.inRange = Math.sqrt((px-tx)*(px-tx) + (py-ty)*(py-ty)) < REACH * TILE;
-});
+  var tx = col * TILE + TILE / 2;
+  var ty = row * TILE + TILE / 2;
+  return Math.sqrt((px-tx)*(px-tx) + (py-ty)*(py-ty)) < REACH * TILE;
+}
 
-// Linksklick: erst Zombie treffen, dann Block abbauen
-canvas.addEventListener("click", function(e) {
+// Tap auf die Hotbar-Felder? (nur für Handy, damit man Material wählen kann)
+function tapOnHotbar(x, y) {
+  var slots = [WOOD, STONE, DIRT];
+  var size  = 36, gap = 6;
+  var total = slots.length * (size + gap) - gap;
+  var sx = Math.floor((canvas.width - total) / 2);
+  var hy = canvas.height - size - 8;
+  if (y < hy || y > hy + size) return false;
+  for (var i = 0; i < slots.length; i++) {
+    var bx = sx + i * (size + gap);
+    if (x >= bx && x <= bx + size) {
+      selectedBlock = slots[i];
+      return true;
+    }
+  }
+  return false;
+}
+
+// Aktion: schlagen / Block abbauen
+function attackAt(pos) {
   if (player.dead) return;
-
-  // Schwinganimation starten
   player.swingTimer = Date.now();
 
-  // Treffer: Mauszeiger muss direkt auf dem Zombie sein
+  // Zuerst gucken ob ein Zombie getroffen wird
   var hitZombie = false;
   for (var i = 0; i < zombies.length; i++) {
     var z = zombies[i];
-
-    // Ist der Mauszeiger innerhalb der Zombie-Fläche?
-    var cursorOnZombie = mouse.worldX >= z.x && mouse.worldX <= z.x + z.width &&
-                         mouse.worldY >= z.y && mouse.worldY <= z.y + z.height;
-
-    // Ist der Spieler nah genug (Reichweite)?
+    var cursorOnZombie = pos.worldX >= z.x && pos.worldX <= z.x + z.width &&
+                         pos.worldY >= z.y && pos.worldY <= z.y + z.height;
     var px = player.x + player.width  / 2;
     var py = player.y + player.height / 2;
     var zx = z.x + z.width  / 2;
     var zy = z.y + z.height / 2;
-    var playerDist = Math.sqrt((px-zx)*(px-zx) + (py-zy)*(py-zy));
-
-    if (cursorOnZombie && playerDist < REACH * TILE) {
+    var dist = Math.sqrt((px-zx)*(px-zx) + (py-zy)*(py-zy));
+    if (cursorOnZombie && dist < REACH * TILE) {
       z.hp--;
       hitZombie = true;
       if (z.hp <= 0) zombies.splice(i, 1);
@@ -306,32 +341,109 @@ canvas.addEventListener("click", function(e) {
   }
 
   if (!hitZombie) {
-    // Block abbauen
-    if (!mouse.inRange) return;
-    var type = getTile(mouse.col, mouse.row);
+    if (!isPosInRange(pos.col, pos.row)) return;
+    var type = getTile(pos.col, pos.row);
     if (type !== AIR && type !== WATER) {
-      world[mouse.row][mouse.col] = AIR;
+      world[pos.row][pos.col] = AIR;
       if (inventory[type] !== undefined) inventory[type]++;
     }
   }
-});
+}
 
-// Rechtsklick: Block setzen
-canvas.addEventListener("contextmenu", function(e) {
-  e.preventDefault();
+// Aktion: Block setzen
+function buildAt(pos) {
   if (player.dead) return;
-  if (!mouse.inRange) return;
-  if (getTile(mouse.col, mouse.row) !== AIR) return;
+  if (!isPosInRange(pos.col, pos.row)) return;
+  if (getTile(pos.col, pos.row) !== AIR) return;
   if (inventory[selectedBlock] <= 0) return;
   var pCL = Math.floor(player.x / TILE);
   var pCR = Math.floor((player.x + player.width  - 1) / TILE);
   var pRT = Math.floor(player.y / TILE);
   var pRB = Math.floor((player.y + player.height - 1) / TILE);
-  if (mouse.col >= pCL && mouse.col <= pCR &&
-      mouse.row >= pRT && mouse.row <= pRB) return;
-  world[mouse.row][mouse.col] = selectedBlock;
+  if (pos.col >= pCL && pos.col <= pCR &&
+      pos.row >= pRT && pos.row <= pRB) return;
+  world[pos.row][pos.col] = selectedBlock;
   inventory[selectedBlock]--;
+}
+
+// Maus-Bewegung: Zielfeld aktualisieren (Desktop)
+canvas.addEventListener("mousemove", function(e) {
+  var pos = getCanvasPos(e);
+  mouse.x       = pos.x;
+  mouse.y       = pos.y;
+  mouse.worldX  = pos.worldX;
+  mouse.worldY  = pos.worldY;
+  mouse.col     = pos.col;
+  mouse.row     = pos.row;
+  mouse.inRange = isPosInRange(pos.col, pos.row);
 });
+
+// Linksklick (Desktop): schlagen / abbauen
+canvas.addEventListener("click", function(e) {
+  var pos = getCanvasPos(e);
+  // Auf Handy: erst Hotbar-Tap prüfen, dann je nach Modus
+  if (isMobile()) {
+    if (tapOnHotbar(pos.x, pos.y)) return;
+    // Maus-Position für drawTarget aktualisieren
+    mouse.worldX = pos.worldX; mouse.worldY = pos.worldY;
+    mouse.col = pos.col; mouse.row = pos.row;
+    mouse.inRange = isPosInRange(pos.col, pos.row);
+    if (mobileMode === "build") { buildAt(pos); return; }
+  }
+  attackAt(pos);
+});
+
+// Rechtsklick (Desktop): Block setzen
+canvas.addEventListener("contextmenu", function(e) {
+  e.preventDefault();
+  var pos = getCanvasPos(e);
+  buildAt(pos);
+});
+
+// ------------------------------------------------------------
+// Handy-Steuerung: D-Pad, Spring-Button, Modus-Schalter
+// ------------------------------------------------------------
+function setupMobileControls() {
+  var btnLeft  = document.getElementById("btnLeft");
+  var btnRight = document.getElementById("btnRight");
+  var btnJump  = document.getElementById("btnJump");
+  var modeBtn  = document.getElementById("modeBtn");
+  if (!btnLeft || !btnRight || !btnJump || !modeBtn) return;
+
+  // Bindet einen Button an eine Taste (sowohl Touch als auch Maus)
+  function bindKey(btn, key) {
+    function down(e) { e.preventDefault(); keys[key] = true; }
+    function up(e)   { e.preventDefault(); keys[key] = false; }
+    btn.addEventListener("touchstart", down, { passive: false });
+    btn.addEventListener("touchend",   up,   { passive: false });
+    btn.addEventListener("touchcancel",up,   { passive: false });
+    btn.addEventListener("mousedown",  down);
+    btn.addEventListener("mouseup",    up);
+    btn.addEventListener("mouseleave", up);
+  }
+
+  bindKey(btnLeft,  "a");
+  bindKey(btnRight, "d");
+  bindKey(btnJump,  "w");
+
+  // Modus-Schalter: zwischen "fight" (Schwert) und "build" (Spitzhacke)
+  function toggleMode(e) {
+    if (e) e.preventDefault();
+    mobileMode = (mobileMode === "fight") ? "build" : "fight";
+    modeBtn.textContent = (mobileMode === "fight") ? "⚔" : "⛏";
+  }
+  modeBtn.addEventListener("click", toggleMode);
+  modeBtn.addEventListener("touchend", toggleMode, { passive: false });
+
+  // Neustart-Button per Tap aufs Game-Over (Handy hat kein "R")
+  canvas.addEventListener("touchstart", function(e) {
+    if (player.dead) {
+      e.preventDefault();
+      restartGame();
+    }
+  }, { passive: false });
+}
+setupMobileControls();
 
 // ------------------------------------------------------------
 // Hilfsfunktionen

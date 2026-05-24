@@ -2,6 +2,8 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8" />
+  <!-- viewport: damit das Spiel auf Handys richtig skaliert wird -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
   <title>MiniCraft Browser</title>
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -9,8 +11,24 @@
 
   <h1>MiniCraft Browser</h1>
 
-  <!-- Das ist unser Spielfeld. Alles wird hier drauf gezeichnet. -->
-  <canvas id="gameCanvas" width="640" height="480"></canvas>
+  <!-- Wrapper: Canvas + Modus-Knopf liegen übereinander -->
+  <div id="gameWrapper">
+    <canvas id="gameCanvas" width="640" height="480"></canvas>
+
+    <!-- Modus-Knopf oben rechts: zeigt aktuellen Modus (⚔ = schlagen, ⛏ = bauen) -->
+    <!-- Nur sichtbar auf Handys -->
+    <button id="modeBtn" class="mobile-only" type="button">⚔</button>
+  </div>
+
+  <!-- Handy-Steuerung: D-Pad links, Spring-Button rechts -->
+  <!-- Nur sichtbar auf Handys -->
+  <div id="mobileControls" class="mobile-only">
+    <div id="dpad">
+      <button id="btnLeft"  class="mobBtn" type="button">◀</button>
+      <button id="btnRight" class="mobBtn" type="button">▶</button>
+    </div>
+    <button id="btnJump" class="mobBtn" type="button">⤴</button>
+  </div>
 
   <script src="game.js"></script>
 </body>
