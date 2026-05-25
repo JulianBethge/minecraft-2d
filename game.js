@@ -26,6 +26,63 @@ COLORS[GRASS]  = "#6ab04c"; COLORS[DIRT]   = "#9b5e28";
 COLORS[STONE]  = "#808080"; COLORS[WOOD]   = "#7a5230";
 COLORS[LEAVES] = "#2e8b2e"; COLORS[WATER]  = "#2980b9";
 
+// ------------------------------------------------------------
+// Sound-System (Web Audio API – keine Dateien nötig, alles generiert)
+// ------------------------------------------------------------
+var audioCtx = null;
+function getAudio() {
+  // AudioContext erst beim ersten Ton erstellen (Browser-Regel: erst nach Klick)
+  if (!audioCtx) {
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch(e) { return null; }
+  }
+  return audioCtx;
+}
+
+// Ton: Frequenz, Wellenform, Lautstärke, Dauer, Endfrequenz (optional)
+function playTone(freq, wave, vol, dur, freqEnd) {
+  var ac = getAudio(); if (!ac) return;
+  var osc = ac.createOscillator();
+  var gain = ac.createGain();
+  osc.connect(gain); gain.connect(ac.destination);
+  osc.type = wave || "square";
+  osc.frequency.setValueAtTime(freq, ac.currentTime);
+  if (freqEnd !== undefined)
+    osc.frequency.linearRampToValueAtTime(freqEnd, ac.currentTime + dur);
+  gain.gain.setValueAtTime(vol, ac.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
+  osc.start(); osc.stop(ac.currentTime + dur);
+}
+
+// Rauschen: für Schlag- und Abbau-Geräusche
+function playNoise(vol, dur, filterHz) {
+  var ac = getAudio(); if (!ac) return;
+  var frames = Math.floor(ac.sampleRate * dur);
+  var buf = ac.createBuffer(1, frames, ac.sampleRate);
+  var d = buf.getChannelData(0);
+  for (var i = 0; i < frames; i++) d[i] = Math.random() * 2 - 1;
+  var src = ac.createBufferSource(); src.buffer = buf;
+  var flt = ac.createBiquadFilter(); flt.type = "bandpass";
+  flt.frequency.value = filterHz || 1000;
+  var gain = ac.createGain();
+  gain.gain.setValueAtTime(vol, ac.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
+  src.connect(flt); flt.connect(gain); gain.connect(ac.destination);
+  src.start(); src.stop(ac.currentTime + dur);
+}
+
+// Konkrete Sound-Funktionen
+function sndJump()        { playTone(200, "sine",     0.10, 0.12, 320); }
+function sndBlockBreak()  { playNoise(0.20, 0.10, 600); playTone(110, "square", 0.06, 0.07); }
+function sndBlockPlace()  { playNoise(0.14, 0.06, 2200); playTone(200, "square", 0.07, 0.04); }
+function sndSwing()       { playNoise(0.08, 0.09, 3500); }
+function sndHitZombie()   { playTone(140, "sawtooth", 0.12, 0.09, 70); }
+function sndHitSkeleton() { playTone(260, "square",   0.10, 0.08, 160); }
+function sndHitPlayer()   { playTone(80,  "sawtooth", 0.18, 0.18, 45); }
+function sndArrowHit()    { playNoise(0.10, 0.06, 4000); playTone(180, "sine", 0.07, 0.07, 90); }
+function sndDeath()       { playTone(100, "sawtooth", 0.18, 0.5, 35); playTone(55, "sine", 0.10, 0.7, 25); }
+function sndShoot()       { playNoise(0.07, 0.07, 5000); playTone(300, "sine", 0.05, 0.06, 250); }
+
 var NAMES = {};
 NAMES[GRASS]  = "Gras";  NAMES[DIRT]   = "Erde";
 NAMES[STONE]  = "Stein"; NAMES[WOOD]   = "Holz";
@@ -284,6 +341,183 @@ spawnGroup();
 spawnGroup();
 
 // ------------------------------------------------------------
+// Skelette (schießen Pfeile auf den Spieler)
+// ------------------------------------------------------------
+var skeletons          = [];
+var MAX_SKELETONS      = 15;
+var skeletonSpawnTimer = Date.now();
+var arrows             = []; // alle fliegenden Pfeile
+
+// Einen Skelett-Gegner an Position hinzufügen
+// strong = true → Boss-Skelett (größer, mehr HP, mehr Schaden)
+function addSkeletonAt(col, row, maxLimit, strong) {
+  var limit = (maxLimit !== undefined) ? maxLimit : MAX_SKELETONS;
+  if (skeletons.length >= limit) return false;
+  if (getTile(col, row)   !== AIR) return false;
+  if (getTile(col, row+1) !== AIR) return false;
+  if (!isSolid(getTile(col, row+2)))  return false;
+
+  // Boss-Skelett: größer, mehr HP, mehr Schaden pro Pfeil
+  var w      = strong ? 30 : 22;
+  var h      = strong ? 62 : 48;
+  var hp     = strong ? 5  : 3;
+  var damage = strong ? 2.5 : 0.5;
+
+  skeletons.push({
+    x:            col * TILE + (TILE - w) / 2,
+    y:            row * TILE,
+    width:        w,
+    height:       h,
+    hp:           hp,
+    maxHp:        hp,
+    damage:       damage,    // wird auf jeden Pfeil gegeben
+    strong:       !!strong,
+    velocityY:    0,
+    onGround:     false,
+    jumpCooldown: 0,
+    shootCooldown: Date.now() + 1000, // 1s Aufwärm-Zeit nach Spawn
+    dir:          1
+  });
+  return true;
+}
+
+// Skelett-Gruppe in Höhle spawnen (kleiner als Zombie-Gruppe)
+function spawnSkeletonGroup() {
+  for (var attempt = 0; attempt < 150; attempt++) {
+    var baseCol = Math.floor(1 + Math.random() * (WORLD_COLS - 2));
+    var baseRow = Math.floor(14 + Math.random() * (WORLD_ROWS - 18));
+    // 15% Chance auf Boss-Skelett (seltener als bei Zombies)
+    var strong = Math.random() < 0.15;
+    if (!addSkeletonAt(baseCol, baseRow, undefined, strong)) continue;
+
+    // Noch 0–2 weitere Skelette daneben (kleinere Gruppen als Zombies)
+    var extra = Math.floor(Math.random() * 3);
+    for (var g = 0; g < extra; g++) {
+      var dc = Math.floor(Math.random() * 7) - 3;
+      var c  = Math.max(1, Math.min(WORLD_COLS - 2, baseCol + dc));
+      addSkeletonAt(c, baseRow);
+    }
+    return;
+  }
+}
+
+// Skelette an der Oberfläche spawnen (nachts)
+function spawnSkeletonGroupSurface() {
+  var surfaceLimit = MAX_SKELETONS + 10;
+
+  var spots = [];
+  for (var c = 2; c < WORLD_COLS - 2; c++) {
+    for (var r = 1; r < 16; r++) {
+      if (world[r][c]   === AIR &&
+          world[r+1][c] === AIR &&
+          isSolid(world[r+2][c])) {
+        spots.push({ col: c, row: r });
+        break;
+      }
+    }
+  }
+  if (spots.length === 0) return;
+
+  var spot = spots[Math.floor(Math.random() * spots.length)];
+  var strong = Math.random() < 0.15;
+  if (!addSkeletonAt(spot.col, spot.row, surfaceLimit, strong)) return;
+
+  // Noch 1–3 weitere daneben
+  var extra = 1 + Math.floor(Math.random() * 3);
+  for (var g = 0; g < extra; g++) {
+    var dc = Math.floor(Math.random() * 11) - 5;
+    var nc = Math.max(1, Math.min(WORLD_COLS - 2, spot.col + dc));
+    addSkeletonAt(nc, spot.row, surfaceLimit);
+  }
+}
+
+// Beim Start eine Skelett-Gruppe spawnen
+spawnSkeletonGroup();
+
+// ------------------------------------------------------------
+// Creeper (laufen lautlos ran, zünden sich an und explodieren)
+// ------------------------------------------------------------
+var creepers          = [];
+var MAX_CREEPERS      = 10;
+var creeperSpawnTimer = Date.now();
+var explosions        = []; // Visuelle Explosions-Effekte
+
+function addCreeperAt(col, row, maxLimit, strong) {
+  var limit = (maxLimit !== undefined) ? maxLimit : MAX_CREEPERS;
+  if (creepers.length >= limit) return false;
+  if (getTile(col, row)   !== AIR) return false;
+  if (getTile(col, row+1) !== AIR) return false;
+  if (!isSolid(getTile(col, row+2))) return false;
+
+  var w  = strong ? 28 : 20;
+  var h  = strong ? 60 : 46;
+  var hp = strong ? 5  : 3;
+
+  creepers.push({
+    x:            col * TILE + (TILE - w) / 2,
+    y:            row * TILE,
+    width:        w,
+    height:       h,
+    hp:           hp,
+    maxHp:        hp,
+    strong:       !!strong,
+    velocityY:    0,
+    onGround:     false,
+    jumpCooldown: 0,
+    dir:          1,
+    fuse:         0,        // 0 = Lunte nicht gezündet
+    fuseStart:    0         // Zeitstempel wann Lunte angezündet wurde
+  });
+  return true;
+}
+
+function spawnCreeperGroup() {
+  for (var attempt = 0; attempt < 150; attempt++) {
+    var baseCol = Math.floor(1 + Math.random() * (WORLD_COLS - 2));
+    var baseRow = Math.floor(14 + Math.random() * (WORLD_ROWS - 18));
+    var strong  = Math.random() < 0.12; // 12% Boss-Creeper
+    if (!addCreeperAt(baseCol, baseRow, undefined, strong)) continue;
+    var extra = Math.floor(Math.random() * 2); // kleine Gruppen
+    for (var g = 0; g < extra; g++) {
+      var dc = Math.floor(Math.random() * 7) - 3;
+      addCreeperAt(Math.max(1, Math.min(WORLD_COLS-2, baseCol+dc)), baseRow);
+    }
+    return;
+  }
+}
+
+function spawnCreeperGroupSurface() {
+  var surfaceLimit = MAX_CREEPERS + 8;
+  var spots = [];
+  for (var c = 2; c < WORLD_COLS - 2; c++) {
+    for (var r = 1; r < 16; r++) {
+      if (world[r][c] === AIR && world[r+1][c] === AIR && isSolid(world[r+2][c])) {
+        spots.push({ col: c, row: r }); break;
+      }
+    }
+  }
+  if (spots.length === 0) return;
+  var spot   = spots[Math.floor(Math.random() * spots.length)];
+  var strong = Math.random() < 0.12;
+  if (!addCreeperAt(spot.col, spot.row, surfaceLimit, strong)) return;
+  var extra = 1 + Math.floor(Math.random() * 3);
+  for (var g = 0; g < extra; g++) {
+    var dc = Math.floor(Math.random() * 9) - 4;
+    addCreeperAt(Math.max(1, Math.min(WORLD_COLS-2, spot.col+dc)), spot.row, surfaceLimit);
+  }
+}
+
+// Sound für Explosion und Zischen
+function sndFuse()      { playTone(600, "sawtooth", 0.08, 0.1, 900); }
+function sndExplosion() {
+  playNoise(0.35, 0.4, 200);
+  playTone(80, "sawtooth", 0.25, 0.3, 30);
+}
+
+// Beim Start eine Creeper-Gruppe spawnen
+spawnCreeperGroup();
+
+// ------------------------------------------------------------
 // Tag-Nacht-Zyklus
 // ------------------------------------------------------------
 var DAY_MS        = 60000;      // 1 Minute = 60 000 ms
@@ -400,6 +634,7 @@ function tapOnHotbar(x, y) {
 function attackAt(pos) {
   if (player.dead) return;
   player.swingTimer = Date.now();
+  sndSwing(); // Schwingen-Geräusch immer
 
   // Zuerst gucken ob ein Zombie getroffen wird
   var hitZombie = false;
@@ -414,17 +649,63 @@ function attackAt(pos) {
     var dist = Math.sqrt((px-zx)*(px-zx) + (py-zy)*(py-zy));
     if (cursorOnZombie && dist < REACH * TILE) {
       z.hp--;
+      sndHitZombie();
       hitZombie = true;
       if (z.hp <= 0) zombies.splice(i, 1);
       break;
     }
   }
 
+  // Wenn kein Zombie getroffen: gucken ob ein Skelett getroffen wird
+  var hitSkeleton = false;
   if (!hitZombie) {
+    for (var si = 0; si < skeletons.length; si++) {
+      var s = skeletons[si];
+      var cursorOnSk = pos.worldX >= s.x && pos.worldX <= s.x + s.width &&
+                       pos.worldY >= s.y && pos.worldY <= s.y + s.height;
+      var pxS = player.x + player.width  / 2;
+      var pyS = player.y + player.height / 2;
+      var sxC = s.x + s.width  / 2;
+      var syC = s.y + s.height / 2;
+      var distS = Math.sqrt((pxS-sxC)*(pxS-sxC) + (pyS-syC)*(pyS-syC));
+      if (cursorOnSk && distS < REACH * TILE) {
+        s.hp--;
+        sndHitSkeleton();
+        hitSkeleton = true;
+        if (s.hp <= 0) skeletons.splice(si, 1);
+        break;
+      }
+    }
+  }
+
+  // Creeper treffen?
+  var hitCreeper = false;
+  if (!hitZombie && !hitSkeleton) {
+    for (var ci = 0; ci < creepers.length; ci++) {
+      var cr = creepers[ci];
+      var cursorOnCr = pos.worldX >= cr.x && pos.worldX <= cr.x + cr.width &&
+                       pos.worldY >= cr.y && pos.worldY <= cr.y + cr.height;
+      var pxC = player.x + player.width  / 2;
+      var pyC = player.y + player.height / 2;
+      var cxC = cr.x + cr.width  / 2;
+      var cyC = cr.y + cr.height / 2;
+      var distC = Math.sqrt((pxC-cxC)*(pxC-cxC) + (pyC-cyC)*(pyC-cyC));
+      if (cursorOnCr && distC < REACH * TILE) {
+        cr.hp--;
+        hitCreeper = true;
+        if (cr.hp <= 0) creepers.splice(ci, 1);
+        else sndHitZombie();
+        break;
+      }
+    }
+  }
+
+  if (!hitZombie && !hitSkeleton && !hitCreeper) {
     if (!isPosInRange(pos.col, pos.row)) return;
     var type = getTile(pos.col, pos.row);
     if (type !== AIR && type !== WATER) {
       world[pos.row][pos.col] = AIR;
+      sndBlockBreak();
       if (inventory[type] !== undefined) inventory[type]++;
     }
   }
@@ -444,6 +725,7 @@ function buildAt(pos) {
       pos.row >= pRT && pos.row <= pRB) return;
   world[pos.row][pos.col] = selectedBlock;
   inventory[selectedBlock]--;
+  sndBlockPlace();
 }
 
 // Maus-Bewegung: Zielfeld aktualisieren (Desktop)
@@ -548,6 +830,15 @@ function restartGame() {
   spawnGroup();
   spawnGroup();
   zombieSpawnTimer  = Date.now();
+  // Skelette + Pfeile auch zurücksetzen
+  skeletons = [];
+  arrows    = [];
+  spawnSkeletonGroup();
+  skeletonSpawnTimer = Date.now();
+  creepers   = [];
+  explosions = [];
+  spawnCreeperGroup();
+  creeperSpawnTimer = Date.now();
   dayStartTime      = Date.now(); // neuer Tag nach Neustart
   nightSpawnTimer   = Date.now();
   updateCamera();
@@ -589,6 +880,7 @@ function update() {
   if ((keys["w"] || keys[" "]) && player.onGround) {
     player.velocityY = JUMP_FORCE;
     player.onGround  = false;
+    sndJump();
   }
 
   // --- Spieler vertikal ---
@@ -708,7 +1000,8 @@ function update() {
       if (t2 - z.lastHit >= 2000) {
         player.hp -= z.damage;  // normaler Zombie: 0.5, starker: 2.5
         z.lastHit  = t2;
-        if (player.hp <= 0) { player.hp = 0; player.dead = true; }
+        if (player.hp <= 0) { player.hp = 0; player.dead = true; sndDeath(); }
+        else sndHitPlayer();
       }
     }
   }
@@ -789,7 +1082,391 @@ function update() {
       player.x = WORLD_COLS * TILE - player.width;
   }
 
+  // --- Skelette: Bewegung + Schwerkraft + Schießen ---
+  for (var si = 0; si < skeletons.length; si++) {
+    var s = skeletons[si];
+
+    // Blickrichtung zum Spieler
+    var sCX    = s.x + s.width  / 2;
+    var pCXS   = player.x + player.width / 2;
+    var distSP = Math.abs(sCX - pCXS);
+    s.dir = (sCX < pCXS) ? 1 : -1;
+
+    // Skelett bewegt sich, wenn Spieler nah genug ist
+    // Zwischen 120–320px → ranlaufen; unter 120px → wegrennen (Abstand halten)
+    // moveDir = echte Bewegungsrichtung (wichtig für Wand-Checks!)
+    var moveDir = 0;
+    if (distSP < 320 && distSP > 120) {
+      moveDir = s.dir;       // ranlaufen: Richtung zum Spieler
+    } else if (distSP < 120) {
+      moveDir = -s.dir;      // wegrennen: entgegengesetzte Richtung
+    }
+
+    if (moveDir !== 0) {
+      s.x += moveDir * 1.0;
+
+      // Wand-Kollision mit der ECHTEN Bewegungsrichtung prüfen
+      var sRowTop  = Math.floor(s.y / TILE);
+      var sRowBot  = Math.floor((s.y + s.height - 1) / TILE);
+      var hitWallS = false;
+
+      if (moveDir > 0) {
+        // Läuft nach rechts → rechte Seite prüfen
+        var wcS = Math.floor((s.x + s.width - 1) / TILE);
+        if (isSolid(getTile(wcS, sRowTop)) || isSolid(getTile(wcS, sRowBot))) {
+          s.x = wcS * TILE - s.width;
+          hitWallS = true;
+        }
+      } else {
+        // Läuft nach links → linke Seite prüfen
+        var wcS = Math.floor(s.x / TILE);
+        if (isSolid(getTile(wcS, sRowTop)) || isSolid(getTile(wcS, sRowBot))) {
+          s.x = (wcS + 1) * TILE;
+          hitWallS = true;
+        }
+      }
+
+      if (hitWallS) {
+        if (s.onGround && Date.now() - s.jumpCooldown > 900) {
+          // Auf dem Boden + Wand → drüber springen
+          s.velocityY    = JUMP_FORCE * 0.88;
+          s.onGround     = false;
+          s.jumpCooldown = Date.now();
+        } else if (!s.onGround) {
+          // In der Luft + Wand → abprallen
+          s.dir *= -1;
+          s.x   += s.dir * 4;
+        }
+      }
+
+      // Schon vor der Wand abspringen (look-ahead) – mit echter Bewegungsrichtung
+      if (!hitWallS && s.onGround && Date.now() - s.jumpCooldown > 900) {
+        var sFeetRow = Math.floor((s.y + s.height) / TILE);
+        var sLookCol = (moveDir > 0)
+          ? Math.floor((s.x + s.width + 2) / TILE)
+          : Math.floor((s.x - 2) / TILE);
+        if (isSolid(getTile(sLookCol, sFeetRow - 1))) {
+          s.velocityY    = JUMP_FORCE * 0.88;
+          s.onGround     = false;
+          s.jumpCooldown = Date.now();
+        }
+      }
+    }
+
+    // Schwerkraft
+    s.velocityY += GRAVITY;
+    s.y         += s.velocityY;
+    s.onGround   = false;
+    var sCL = Math.floor(s.x / TILE);
+    var sCR = Math.floor((s.x + s.width - 1) / TILE);
+    if (s.velocityY >= 0) {
+      var sRow = Math.floor((s.y + s.height) / TILE);
+      if (isSolid(getTile(sCL, sRow)) || isSolid(getTile(sCR, sRow))) {
+        s.y = sRow * TILE - s.height; s.velocityY = 0; s.onGround = true;
+      }
+    } else {
+      var sRow = Math.floor(s.y / TILE);
+      if (isSolid(getTile(sCL, sRow)) || isSolid(getTile(sCR, sRow))) {
+        s.y = (sRow + 1) * TILE; s.velocityY = 0;
+      }
+    }
+
+    // ── Sicherheits-Check: Skelett darf niemals in einer Wand stecken ────────
+    // Prüft BEIDE Seiten nach jeder Bewegung und schiebt das Skelett raus.
+    // Das verhindert das Einbuggen in Wände beim Fliehen oder nach dem Springen.
+    var ssRT = Math.floor(s.y / TILE);
+    var ssRB = Math.floor((s.y + s.height - 1) / TILE);
+    // Linke Seite in Wand? → nach rechts schieben
+    var ssLeft = Math.floor(s.x / TILE);
+    if (isSolid(getTile(ssLeft, ssRT)) || isSolid(getTile(ssLeft, ssRB))) {
+      s.x = (ssLeft + 1) * TILE;
+    }
+    // Rechte Seite in Wand? → nach links schieben
+    var ssRight = Math.floor((s.x + s.width - 1) / TILE);
+    if (isSolid(getTile(ssRight, ssRT)) || isSolid(getTile(ssRight, ssRB))) {
+      s.x = ssRight * TILE - s.width;
+    }
+    // Weltgrenzen einhalten
+    if (s.x < 0) s.x = 0;
+    if (s.x + s.width > WORLD_COLS * TILE) s.x = WORLD_COLS * TILE - s.width;
+
+    // Schießen: alle 2 Sekunden, wenn Spieler in Sicht und nah genug
+    if (distSP < 360 && Date.now() - s.shootCooldown > 2000) {
+      var aFromX = s.x + s.width / 2;
+      var aFromY = s.y + s.height * 0.35; // aus dem Oberkörper raus
+      var aToX   = player.x + player.width  / 2;
+      var aToY   = player.y + player.height / 2;
+      var ddx = aToX - aFromX;
+      var ddy = aToY - aFromY;
+      var len = Math.sqrt(ddx*ddx + ddy*ddy);
+      if (len < 1) len = 1;
+      var arrowSpeed = s.strong ? 7 : 6;
+      arrows.push({
+        x:  aFromX,
+        y:  aFromY,
+        vx: (ddx / len) * arrowSpeed,
+        vy: (ddy / len) * arrowSpeed - 1.5, // leichter Bogen nach oben
+        damage: s.damage,
+        strong: s.strong,
+        life:   180  // verschwindet nach 180 Frames (~3 Sek)
+      });
+      sndShoot();
+      s.shootCooldown = Date.now();
+    }
+  }
+
+  // --- Skelette blockieren den Spieler (wie Wände) ---
+  for (var ski = 0; ski < skeletons.length; ski++) {
+    var s = skeletons[ski];
+    var sox = player.x < s.x + s.width  && player.x + player.width  > s.x;
+    var soy = player.y < s.y + s.height && player.y + player.height > s.y;
+    if (!sox || !soy) continue;
+
+    var pushLs = (player.x + player.width)  - s.x;
+    var pushRs = (s.x + s.width) - player.x;
+    var pushDs = (player.y + player.height) - s.y;
+    var pushUs = (s.y + s.height) - player.y;
+    var minPs  = Math.min(pushLs, pushRs, pushDs, pushUs);
+
+    if (minPs === pushDs && player.velocityY >= 0) {
+      player.y = s.y - player.height; player.velocityY = 0; player.onGround = true;
+    } else if (minPs === pushUs && player.velocityY <= 0) {
+      player.y = s.y + s.height; player.velocityY = 0;
+    } else if (minPs === pushLs) {
+      player.x = s.x - player.width;
+    } else {
+      player.x = s.x + s.width;
+    }
+    if (player.x < 0) player.x = 0;
+    if (player.x + player.width > WORLD_COLS * TILE)
+      player.x = WORLD_COLS * TILE - player.width;
+  }
+
+  // --- Pfeile bewegen + Kollision ---
+  for (var ai = arrows.length - 1; ai >= 0; ai--) {
+    var a = arrows[ai];
+    a.vy += 0.15;          // leichte Schwerkraft auf Pfeile
+    a.x  += a.vx;
+    a.y  += a.vy;
+    a.life--;
+
+    // Treffer Spieler?
+    if (a.x >= player.x && a.x <= player.x + player.width &&
+        a.y >= player.y && a.y <= player.y + player.height) {
+      player.hp -= a.damage;
+      if (player.hp <= 0) { player.hp = 0; player.dead = true; sndDeath(); }
+      else sndArrowHit();
+      arrows.splice(ai, 1);
+      continue;
+    }
+
+    // Treffer Wand?
+    var ac = Math.floor(a.x / TILE);
+    var ar = Math.floor(a.y / TILE);
+    if (isSolid(getTile(ac, ar))) {
+      arrows.splice(ai, 1);
+      continue;
+    }
+
+    // Aus der Welt geflogen oder Lebenszeit vorbei?
+    if (a.life <= 0 || a.x < 0 || a.x > WORLD_COLS * TILE ||
+        a.y < 0 || a.y > WORLD_ROWS * TILE) {
+      arrows.splice(ai, 1);
+    }
+  }
+
+  // --- Neue Skelett-Gruppe spawnen (alle 6 Sek, seltener als Zombies) ---
+  if (skeletons.length < MAX_SKELETONS && Date.now() - skeletonSpawnTimer > 6000) {
+    spawnSkeletonGroup();
+    skeletonSpawnTimer = Date.now();
+  }
+
+  // --- Creeper: Bewegung + Lunte + Explosion ---
+  for (var ci = creepers.length - 1; ci >= 0; ci--) {
+    var cr = creepers[ci];
+    var crCX  = cr.x + cr.width  / 2;
+    var crPCX = player.x + player.width  / 2;
+    var crDist = Math.abs(crCX - crPCX);
+    cr.dir = (crCX < crPCX) ? 1 : -1;
+
+    // Lunte-Radius: normal 56px, Boss 72px
+    var fuseRadius = cr.strong ? 72 : 56;
+
+    if (cr.fuse === 0) {
+      // ── Keine Lunte: Creeper läuft auf Spieler zu (wie Zombie) ───────────
+      if (crDist < 320) {
+        cr.x += cr.dir * 1.2;
+
+        var crRowTop = Math.floor(cr.y / TILE);
+        var crRowBot = Math.floor((cr.y + cr.height - 1) / TILE);
+        var crHitWall = false;
+        if (cr.dir > 0) {
+          var crWC = Math.floor((cr.x + cr.width - 1) / TILE);
+          if (isSolid(getTile(crWC, crRowTop)) || isSolid(getTile(crWC, crRowBot))) {
+            cr.x = crWC * TILE - cr.width; crHitWall = true;
+          }
+        } else {
+          var crWC = Math.floor(cr.x / TILE);
+          if (isSolid(getTile(crWC, crRowTop)) || isSolid(getTile(crWC, crRowBot))) {
+            cr.x = (crWC + 1) * TILE; crHitWall = true;
+          }
+        }
+        if (crHitWall) {
+          if (cr.onGround && Date.now() - cr.jumpCooldown > 900) {
+            cr.velocityY = JUMP_FORCE * 0.88; cr.onGround = false; cr.jumpCooldown = Date.now();
+          } else if (!cr.onGround) { cr.dir *= -1; cr.x += cr.dir * 4; }
+        }
+        if (!crHitWall && cr.onGround && Date.now() - cr.jumpCooldown > 900) {
+          var crFR = Math.floor((cr.y + cr.height) / TILE);
+          var crLC = (cr.dir > 0) ? Math.floor((cr.x + cr.width + 2) / TILE) : Math.floor((cr.x - 2) / TILE);
+          if (isSolid(getTile(crLC, crFR - 1))) {
+            cr.velocityY = JUMP_FORCE * 0.88; cr.onGround = false; cr.jumpCooldown = Date.now();
+          }
+        }
+
+        // Spieler nah genug → Lunte anzünden!
+        if (crDist < fuseRadius) {
+          cr.fuse = 1;
+          cr.fuseStart = Date.now();
+          sndFuse();
+        }
+      }
+    } else {
+      // ── Lunte brennt: Creeper steht still und blinkt ─────────────────────
+      var fuseTime = cr.strong ? 1500 : 2000; // Boss explodiert schneller
+
+      // Spieler weggegangen? → Lunte erlischt
+      if (crDist > fuseRadius + 20) {
+        cr.fuse = 0;
+      }
+
+      // Zeit abgelaufen → EXPLOSION!
+      if (Date.now() - cr.fuseStart >= fuseTime) {
+        var expRadius = cr.strong ? 5 : 3; // Explosionsradius in Tiles
+        var expCCol   = Math.floor(crCX / TILE);
+        var expCRow   = Math.floor((cr.y + cr.height * 0.5) / TILE);
+
+        // Blöcke zerstören (runder Bereich)
+        for (var er2 = -expRadius; er2 <= expRadius; er2++) {
+          for (var ec2 = -expRadius; ec2 <= expRadius; ec2++) {
+            if (er2*er2 + ec2*ec2 <= expRadius*expRadius) {
+              var tr = expCRow + er2, tc = expCCol + ec2;
+              if (tr >= 0 && tr < WORLD_ROWS && tc >= 0 && tc < WORLD_COLS)
+                if (world[tr][tc] !== AIR) world[tr][tc] = AIR;
+            }
+          }
+        }
+
+        // Spieler-Schaden abhängig von Entfernung
+        var pDist = Math.sqrt(
+          (player.x + player.width/2  - crCX) * (player.x + player.width/2  - crCX) +
+          (player.y + player.height/2 - (cr.y + cr.height*0.5)) * (player.y + player.height/2 - (cr.y + cr.height*0.5))
+        );
+        var maxExpDist = expRadius * TILE;
+        if (pDist < maxExpDist) {
+          var dmg = cr.strong ? 8 : 4;
+          player.hp -= dmg * (1 - pDist / maxExpDist);
+          if (player.hp <= 0) { player.hp = 0; player.dead = true; sndDeath(); }
+        }
+
+        // Explosions-Effekt hinzufügen
+        explosions.push({ x: crCX, y: cr.y + cr.height * 0.5,
+          r: 0, maxR: expRadius * TILE * 1.2,
+          alpha: 1.0, strong: cr.strong });
+
+        sndExplosion();
+        creepers.splice(ci, 1); // Creeper verschwindet
+        continue;
+      }
+    }
+
+    // Schwerkraft
+    cr.velocityY += GRAVITY;
+    cr.y += cr.velocityY;
+    cr.onGround = false;
+    var crCL = Math.floor(cr.x / TILE), crCR = Math.floor((cr.x + cr.width - 1) / TILE);
+    if (cr.velocityY >= 0) {
+      var crRow = Math.floor((cr.y + cr.height) / TILE);
+      if (isSolid(getTile(crCL, crRow)) || isSolid(getTile(crCR, crRow))) {
+        cr.y = crRow * TILE - cr.height; cr.velocityY = 0; cr.onGround = true;
+      }
+    } else {
+      var crRow = Math.floor(cr.y / TILE);
+      if (isSolid(getTile(crCL, crRow)) || isSolid(getTile(crCR, crRow))) {
+        cr.y = (crRow + 1) * TILE; cr.velocityY = 0;
+      }
+    }
+    // Wand-Sicherheits-Check
+    var crRT = Math.floor(cr.y / TILE), crRB = Math.floor((cr.y + cr.height - 1) / TILE);
+    var crLeft = Math.floor(cr.x / TILE);
+    if (isSolid(getTile(crLeft, crRT)) || isSolid(getTile(crLeft, crRB))) cr.x = (crLeft + 1) * TILE;
+    var crRight = Math.floor((cr.x + cr.width - 1) / TILE);
+    if (isSolid(getTile(crRight, crRT)) || isSolid(getTile(crRight, crRB))) cr.x = crRight * TILE - cr.width;
+    if (cr.x < 0) cr.x = 0;
+    if (cr.x + cr.width > WORLD_COLS * TILE) cr.x = WORLD_COLS * TILE - cr.width;
+  }
+
+  // Explosions-Effekte updaten (wachsen + verblassen)
+  for (var ei = explosions.length - 1; ei >= 0; ei--) {
+    var ex = explosions[ei];
+    ex.r     += ex.maxR * 0.08;
+    ex.alpha -= 0.06;
+    if (ex.alpha <= 0) explosions.splice(ei, 1);
+  }
+
+  // --- Creeper blockieren den Spieler ---
+  for (var cbi = 0; cbi < creepers.length; cbi++) {
+    var cr = creepers[cbi];
+    var cox = player.x < cr.x + cr.width  && player.x + player.width  > cr.x;
+    var coy = player.y < cr.y + cr.height && player.y + player.height > cr.y;
+    if (!cox || !coy) continue;
+    var cpL = (player.x + player.width) - cr.x;
+    var cpR = (cr.x + cr.width) - player.x;
+    var cpD = (player.y + player.height) - cr.y;
+    var cpU = (cr.y + cr.height) - player.y;
+    var cpMin = Math.min(cpL, cpR, cpD, cpU);
+    if (cpMin === cpD && player.velocityY >= 0) {
+      player.y = cr.y - player.height; player.velocityY = 0; player.onGround = true;
+    } else if (cpMin === cpU && player.velocityY <= 0) {
+      player.y = cr.y + cr.height; player.velocityY = 0;
+    } else if (cpMin === cpL) {
+      player.x = cr.x - player.width;
+    } else {
+      player.x = cr.x + cr.width;
+    }
+    if (player.x < 0) player.x = 0;
+    if (player.x + player.width > WORLD_COLS * TILE) player.x = WORLD_COLS * TILE - player.width;
+  }
+
+  // --- Neue Creeper-Gruppe spawnen (alle 8 Sek) ---
+  if (creepers.length < MAX_CREEPERS && Date.now() - creeperSpawnTimer > 8000) {
+    spawnCreeperGroup();
+    creeperSpawnTimer = Date.now();
+  }
+
   updateCamera();
+
+  // --- Skelette an der Oberfläche verbrennen bei Tag ---
+  var brightSk = getSkyBrightness();
+  if (brightSk > 0.5) {
+    for (var bsi = skeletons.length - 1; bsi >= 0; bsi--) {
+      var bs = skeletons[bsi];
+      var sMidRow = Math.floor((bs.y + bs.height * 0.5) / TILE);
+      if (sMidRow < 14) {
+        bs.hp -= 0.03 * brightSk;
+        if (bs.hp <= 0) skeletons.splice(bsi, 1);
+      }
+    }
+  }
+  // --- Nachts: Skelette an der Oberfläche spawnen ---
+  if (isNight() && Date.now() - nightSpawnTimer > 5000) {
+    spawnSkeletonGroupSurface();
+  }
+  // --- Nachts: Creeper an der Oberfläche spawnen ---
+  if (isNight() && Date.now() - creeperSpawnTimer > 7000) {
+    spawnCreeperGroupSurface();
+    creeperSpawnTimer = Date.now();
+  }
 
   // --- Zombies an der Oberfläche verbrennen bei Tag ---
   // (Zombies in Zeile < 14 sind an der Oberfläche, nicht in Höhlen)
@@ -1148,6 +1825,219 @@ function drawZombies() {
   }
 }
 
+// Skelette zeichnen: knochenweiß, schmaler als Zombies, mit Bogen
+function drawSkeletons() {
+  for (var i = 0; i < skeletons.length; i++) {
+    var s  = skeletons[i];
+    var sx = Math.floor(s.x - cameraX);
+    var sy = Math.floor(s.y - cameraY);
+    var ratio = s.hp / s.maxHp;
+
+    // Farbschema: weiß für normal, gelblich-grau für Boss
+    var bodyColor, headColor;
+    if (s.strong) {
+      // Boss-Skelett: gelblich, leuchtende Augen
+      bodyColor = ratio > 0.5 ? "#d7c290" : "#9c8a5e";
+      headColor = ratio > 0.5 ? "#ede0b8" : "#b8a878";
+    } else {
+      // Normales Skelett: weiß-grau
+      bodyColor = ratio > 0.5 ? "#e0e0e0" : "#a0a0a0";
+      headColor = ratio > 0.5 ? "#f5f5f5" : "#bfbfbf";
+    }
+
+    var headH = Math.round(s.height * 0.35);
+    var bodyY = Math.round(s.height * 0.30);
+
+    // Körper (schmaler als Zombie → Rippen-Effekt)
+    ctx.fillStyle = bodyColor;
+    ctx.fillRect(sx + 2, sy + bodyY, s.width - 4, s.height - bodyY);
+
+    // Rippen als dunkle Streifen
+    ctx.fillStyle = "rgba(60,60,60,0.4)";
+    for (var rib = 0; rib < 3; rib++) {
+      ctx.fillRect(sx + 3, sy + bodyY + 4 + rib * 6, s.width - 6, 2);
+    }
+
+    // Kopf (Totenkopf)
+    ctx.fillStyle = headColor;
+    ctx.fillRect(sx + 1, sy, s.width - 2, headH);
+
+    // Augenhöhlen (schwarz, oder rot beim Boss)
+    var eyeSize = s.strong ? 6 : 5;
+    ctx.fillStyle = s.strong ? "#ff1744" : "#000";
+    ctx.fillRect(sx + 3, sy + 5, eyeSize, eyeSize);
+    ctx.fillRect(sx + s.width - eyeSize - 3, sy + 5, eyeSize, eyeSize);
+
+    // Nasenloch (kleines schwarzes Dreieck/Quadrat in der Mitte)
+    ctx.fillStyle = "#000";
+    ctx.fillRect(sx + s.width / 2 - 1, sy + headH - 6, 2, 4);
+
+    // Zähne als kleine vertikale Linien am unteren Kopfrand
+    ctx.fillStyle = "#000";
+    for (var t = 0; t < 4; t++) {
+      ctx.fillRect(sx + 4 + t * 4, sy + headH - 2, 1, 2);
+    }
+
+    // Boss: Hörner aus Knochen auf dem Kopf
+    if (s.strong) {
+      ctx.fillStyle = headColor;
+      ctx.fillRect(sx + 5,           sy - 6, 4, 7);
+      ctx.fillRect(sx + s.width - 9, sy - 6, 4, 7);
+    }
+
+    // Bogen in Blickrichtung (gebogener Strich)
+    ctx.strokeStyle = "#5d4037"; // Holzbraun
+    ctx.lineWidth   = 2;
+    var bowY = sy + bodyY + 4;
+    if (s.dir >= 0) {
+      ctx.beginPath();
+      ctx.arc(sx + s.width + 4, bowY + 6, 9, -Math.PI/2.2, Math.PI/2.2);
+      ctx.stroke();
+      // Bogensehne
+      ctx.strokeStyle = "#fafafa";
+      ctx.beginPath();
+      ctx.moveTo(sx + s.width + 4, bowY - 2);
+      ctx.lineTo(sx + s.width + 4, bowY + 14);
+      ctx.stroke();
+    } else {
+      ctx.beginPath();
+      ctx.arc(sx - 4, bowY + 6, 9, Math.PI - Math.PI/2.2, Math.PI + Math.PI/2.2);
+      ctx.stroke();
+      ctx.strokeStyle = "#fafafa";
+      ctx.beginPath();
+      ctx.moveTo(sx - 4, bowY - 2);
+      ctx.lineTo(sx - 4, bowY + 14);
+      ctx.stroke();
+    }
+    ctx.lineWidth = 1;
+
+    // HP-Balken über dem Skelett
+    ctx.fillStyle = "#333";
+    ctx.fillRect(sx, sy - 8, s.width, 5);
+    ctx.fillStyle = s.strong ? "#ff6d00" : "#bdbdbd";
+    ctx.fillRect(sx, sy - 8, Math.floor(s.width * ratio), 5);
+  }
+}
+
+// Pfeile zeichnen
+function drawArrows() {
+  for (var i = 0; i < arrows.length; i++) {
+    var a  = arrows[i];
+    var ax = Math.floor(a.x - cameraX);
+    var ay = Math.floor(a.y - cameraY);
+    // Pfeilrichtung aus Geschwindigkeit
+    var ang = Math.atan2(a.vy, a.vx);
+
+    ctx.save();
+    ctx.translate(ax, ay);
+    ctx.rotate(ang);
+
+    // Schaft (heller bei Boss-Pfeil)
+    ctx.fillStyle = a.strong ? "#ff5722" : "#8d6e63";
+    ctx.fillRect(-10, -1, 14, 2);
+    // Spitze
+    ctx.fillStyle = a.strong ? "#ffeb3b" : "#cfd8dc";
+    ctx.beginPath();
+    ctx.moveTo(4, -3);
+    ctx.lineTo(8, 0);
+    ctx.lineTo(4, 3);
+    ctx.closePath();
+    ctx.fill();
+    // Federn am Ende
+    ctx.fillStyle = a.strong ? "#fff59d" : "#eceff1";
+    ctx.fillRect(-10, -3, 3, 2);
+    ctx.fillRect(-10,  1, 3, 2);
+    ctx.restore();
+  }
+}
+
+function drawCreepers() {
+  var now = Date.now();
+  for (var i = 0; i < creepers.length; i++) {
+    var cr = creepers[i];
+    var cx = Math.floor(cr.x - cameraX);
+    var cy = Math.floor(cr.y - cameraY);
+    var ratio = cr.hp / cr.maxHp;
+    var T = cr.width;
+
+    // Blinken wenn Lunte brennt (schneller je näher zur Explosion)
+    if (cr.fuse === 1) {
+      var fuseTime = cr.strong ? 1500 : 2000;
+      var progress = (now - cr.fuseStart) / fuseTime; // 0 → 1
+      var blinkSpeed = 100 + (1 - progress) * 300;    // fängt langsam an, wird schneller
+      var blink = Math.floor(now / blinkSpeed) % 2 === 0;
+      if (blink) {
+        // Weißer Blitz
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(cx - 3, cy - 3, cr.width + 6, cr.height + 6);
+        continue; // Rest überspringen wenn weiß
+      }
+    }
+
+    // Körper (grün, dunkler bei Schaden)
+    var bodyColor = cr.strong
+      ? (ratio > 0.5 ? "#1a6b1a" : "#0f4010")
+      : (ratio > 0.5 ? "#3a9e3a" : "#1f6b1f");
+    ctx.fillStyle = bodyColor;
+    ctx.fillRect(cx, cy, cr.width, cr.height);
+
+    // Typisches Creeper-Gesicht
+    var headH = Math.round(cr.height * 0.38);
+    // Augen (zwei dunkle Quadrate)
+    var eyeS = Math.round(T * 0.22);
+    ctx.fillStyle = cr.strong ? "#001a00" : "#1a1a00";
+    ctx.fillRect(cx + Math.round(T * 0.12), cy + Math.round(headH * 0.2), eyeS, eyeS);
+    ctx.fillRect(cx + Math.round(T * 0.65), cy + Math.round(headH * 0.2), eyeS, eyeS);
+
+    // Mund: das typische "M"-förmige Creeper-Maul
+    var mY  = cy + Math.round(headH * 0.55);
+    var mW  = Math.round(T * 0.18);
+    var mH  = Math.round(headH * 0.2);
+    ctx.fillStyle = "#000";
+    ctx.fillRect(cx + Math.round(T*0.12), mY,      mW, mH);        // links oben
+    ctx.fillRect(cx + Math.round(T*0.12), mY + mH, mW, mH);        // links unten
+    ctx.fillRect(cx + Math.round(T*0.38), mY + mH, mW, mH);        // mitte unten
+    ctx.fillRect(cx + Math.round(T*0.62), mY,      mW, mH);        // rechts oben
+    ctx.fillRect(cx + Math.round(T*0.62), mY + mH, mW, mH);        // rechts unten
+
+    // Boss: dunkle Dornen an den Schultern
+    if (cr.strong) {
+      ctx.fillStyle = "#0a3a0a";
+      ctx.fillRect(cx - 4, cy + headH,     4, 8);
+      ctx.fillRect(cx + cr.width, cy + headH, 4, 8);
+    }
+
+    // HP-Balken
+    ctx.fillStyle = "#333";
+    ctx.fillRect(cx, cy - 8, cr.width, 5);
+    ctx.fillStyle = cr.strong ? "#ff6d00" : "#4caf50";
+    ctx.fillRect(cx, cy - 8, Math.floor(cr.width * ratio), 5);
+  }
+}
+
+function drawExplosions() {
+  for (var i = 0; i < explosions.length; i++) {
+    var ex = explosions[i];
+    var ex2 = Math.floor(ex.x - cameraX);
+    var ey2 = Math.floor(ex.y - cameraY);
+    // Äußerer Ring: orange
+    ctx.beginPath();
+    ctx.arc(ex2, ey2, ex.r, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,120,0," + (ex.alpha * 0.5) + ")";
+    ctx.fill();
+    // Innerer Ring: gelb-weiß
+    ctx.beginPath();
+    ctx.arc(ex2, ey2, ex.r * 0.55, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,240,100," + (ex.alpha * 0.7) + ")";
+    ctx.fill();
+    // Kern: weiß
+    ctx.beginPath();
+    ctx.arc(ex2, ey2, ex.r * 0.2, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255,255,255," + ex.alpha + ")";
+    ctx.fill();
+  }
+}
+
 function drawHpBar() {
   var bx = canvas.width - 164, by = 10, bw = 150, bh = 16;
   // Hintergrund
@@ -1364,6 +2254,10 @@ function gameLoop() {
   drawNightOverlay(); // Dunkel-Overlay bei Nacht
   drawTarget();
   drawZombies();
+  drawSkeletons();
+  drawCreepers();
+  drawArrows();
+  drawExplosions();
   drawPlayer();
   drawInventory();
   drawHotbar();
