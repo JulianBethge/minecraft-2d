@@ -188,8 +188,10 @@ var MAX_ZOMBIES      = 20;
 var zombieSpawnTimer = Date.now();
 
 // Einen einzelnen Zombie an einer bestimmten Position hinzufügen
-function addZombieAt(col, row) {
-  if (zombies.length >= MAX_ZOMBIES) return false;
+// maxLimit ist optional: wird für Oberflächen-Spawn höher gesetzt
+function addZombieAt(col, row, maxLimit) {
+  var limit = (maxLimit !== undefined) ? maxLimit : MAX_ZOMBIES;
+  if (zombies.length >= limit) return false;
   if (getTile(col, row)   !== AIR) return false;
   if (getTile(col, row+1) !== AIR) return false;
   if (!isSolid(getTile(col, row+2)))  return false;
@@ -230,26 +232,37 @@ function spawnGroup() {
 
 // Zombies an der Oberfläche spawnen (nachts)
 function spawnGroupSurface() {
-  for (var attempt = 0; attempt < 150; attempt++) {
-    var baseCol = Math.floor(1 + Math.random() * (WORLD_COLS - 2));
-    // Oberfläche finden: erste solide Zeile von oben, die oben Luft hat
-    var surfRow = -1;
-    for (var r = 2; r < 14; r++) {
-      if (isSolid(world[r][baseCol]) && world[r-1][baseCol] === AIR) {
-        surfRow = r - 2; // 2 Zeilen über dem Boden
-        break;
+  // Nachts dürfen mehr Zombies als normal auf der Oberfläche sein
+  var surfaceLimit = MAX_ZOMBIES + 20;
+
+  // Alle gültigen Oberflächen-Spawnadressen sammeln (zuverlässiger als Zufalls-Versuche)
+  var spots = [];
+  for (var c = 2; c < WORLD_COLS - 2; c++) {
+    for (var r = 1; r < 16; r++) {
+      // Brauche: row=AIR, row+1=AIR, row+2=solid (Boden)
+      if (world[r][c]   === AIR &&
+          world[r+1][c] === AIR &&
+          isSolid(world[r+2][c])) {
+        spots.push({ col: c, row: r });
+        break; // nur oberste gültige Zeile pro Spalte
       }
     }
-    if (surfRow < 0) continue;
-    if (!addZombieAt(baseCol, surfRow)) continue;
-    // Noch 1–3 weitere Zombies daneben
-    var extra = 1 + Math.floor(Math.random() * 3);
-    for (var g = 0; g < extra; g++) {
-      var dc = Math.floor(Math.random() * 7) - 3;
-      var c  = Math.max(1, Math.min(WORLD_COLS - 2, baseCol + dc));
-      addZombieAt(c, surfRow);
-    }
-    return;
+  }
+
+  console.log("[Nacht] Oberflächen-Spots:", spots.length, "| Zombies:", zombies.length, "/ Limit:", surfaceLimit);
+
+  if (spots.length === 0) return;
+
+  // Zufälligen Spot wählen
+  var spot = spots[Math.floor(Math.random() * spots.length)];
+  if (!addZombieAt(spot.col, spot.row, surfaceLimit)) return;
+
+  // Noch 3–6 weitere Zombies daneben (größere Gruppe als tagsüber)
+  var extra = 3 + Math.floor(Math.random() * 4);
+  for (var g = 0; g < extra; g++) {
+    var dc = Math.floor(Math.random() * 11) - 5; // bis ±5 Spalten versetzt
+    var nc = Math.max(1, Math.min(WORLD_COLS - 2, spot.col + dc));
+    addZombieAt(nc, spot.row, surfaceLimit);
   }
 }
 
@@ -781,7 +794,8 @@ function update() {
   }
 
   // --- Nachts: Zombies auch an der Oberfläche spawnen ---
-  if (isNight() && zombies.length < MAX_ZOMBIES && Date.now() - nightSpawnTimer > 5000) {
+  // (kein zombies.length < MAX_ZOMBIES – das prüft spawnGroupSurface selbst mit eigenem Limit)
+  if (isNight() && Date.now() - nightSpawnTimer > 3000) {
     spawnGroupSurface();
     nightSpawnTimer = Date.now();
   }
