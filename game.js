@@ -8,8 +8,8 @@ var ctx    = canvas.getContext("2d");
 var TILE       = 32;
 var COLS       = Math.ceil(canvas.width  / TILE);
 var ROWS       = Math.ceil(canvas.height / TILE);
-var WORLD_COLS = 120;
-var WORLD_ROWS = 32;   // 32 Zeilen tief (war 15)
+var WORLD_COLS = 240;  // doppelt so breit (war 120)
+var WORLD_ROWS = 64;   // doppelt so tief  (war 32)
 
 var GRAVITY    = 0.5;
 var JUMP_FORCE = -11;
@@ -184,24 +184,34 @@ updateCamera();
 // Zombies
 // ------------------------------------------------------------
 var zombies          = [];
-var MAX_ZOMBIES      = 20;
+var MAX_ZOMBIES      = 35;  // mehr Zombies für die größere Welt (war 20)
 var zombieSpawnTimer = Date.now();
 
 // Einen einzelnen Zombie an einer bestimmten Position hinzufügen
 // maxLimit ist optional: wird für Oberflächen-Spawn höher gesetzt
-function addZombieAt(col, row, maxLimit) {
+// strong = true → großer, starker Zombie (seltener)
+function addZombieAt(col, row, maxLimit, strong) {
   var limit = (maxLimit !== undefined) ? maxLimit : MAX_ZOMBIES;
   if (zombies.length >= limit) return false;
   if (getTile(col, row)   !== AIR) return false;
   if (getTile(col, row+1) !== AIR) return false;
   if (!isSolid(getTile(col, row+2)))  return false;
+
+  // Starker Zombie: größer, mehr HP, mehr Schaden
+  var w      = strong ? 30 : 22;
+  var h      = strong ? 62 : 48;
+  var hp     = strong ? 5  : 3;
+  var damage = strong ? 2.5 : 0.5;
+
   zombies.push({
-    x:            col * TILE + (TILE - 22) / 2,
+    x:            col * TILE + (TILE - w) / 2,
     y:            row * TILE,
-    width:        22,
-    height:       48,
-    hp:           3,
-    maxHp:        3,
+    width:        w,
+    height:       h,
+    hp:           hp,
+    maxHp:        hp,
+    damage:       damage,   // Schaden pro Treffer
+    strong:       !!strong, // true = starker Zombie
     velocityY:    0,
     onGround:     false,
     lastHit:      0,         // wann hat dieser Zombie zuletzt den Spieler getroffen
@@ -216,10 +226,11 @@ function spawnGroup() {
   for (var attempt = 0; attempt < 150; attempt++) {
     var baseCol = Math.floor(1 + Math.random() * (WORLD_COLS - 2));
     var baseRow = Math.floor(14 + Math.random() * (WORLD_ROWS - 18));
-    // Basis-Position muss gültig sein
-    if (!addZombieAt(baseCol, baseRow)) continue;
+    // 20% Chance auf einen starken Zombie als Gruppen-Anführer
+    var strong = Math.random() < 0.20;
+    if (!addZombieAt(baseCol, baseRow, undefined, strong)) continue;
 
-    // Noch 1–3 weitere Zombies in der Nähe spawnen
+    // Noch 1–3 weitere normale Zombies in der Nähe spawnen
     var extra = 1 + Math.floor(Math.random() * 3);
     for (var g = 0; g < extra; g++) {
       var dc = Math.floor(Math.random() * 7) - 3; // ±3 Spalten versetzt
@@ -255,7 +266,9 @@ function spawnGroupSurface() {
 
   // Zufälligen Spot wählen
   var spot = spots[Math.floor(Math.random() * spots.length)];
-  if (!addZombieAt(spot.col, spot.row, surfaceLimit)) return;
+  // 20% Chance auf starken Zombie als Gruppen-Anführer
+  var strong = Math.random() < 0.20;
+  if (!addZombieAt(spot.col, spot.row, surfaceLimit, strong)) return;
 
   // Noch 3–6 weitere Zombies daneben (größere Gruppe als tagsüber)
   var extra = 3 + Math.floor(Math.random() * 4);
@@ -693,7 +706,7 @@ function update() {
     if (ox && oy) {
       var t2 = Date.now();
       if (t2 - z.lastHit >= 2000) {
-        player.hp -= 0.5;
+        player.hp -= z.damage;  // normaler Zombie: 0.5, starker: 2.5
         z.lastHit  = t2;
         if (player.hp <= 0) { player.hp = 0; player.dead = true; }
       }
@@ -1036,69 +1049,90 @@ function drawZombies() {
     var zx = Math.floor(z.x - cameraX);
     var zy = Math.floor(z.y - cameraY);
 
-    // Körperfarbe wird dunkler je mehr Schaden
-    var bodyColor = z.hp === 3 ? "#2e7d32" : z.hp === 2 ? "#1b5e20" : "#0a2e0a";
-    var headColor = z.hp === 3 ? "#388e3c" : z.hp === 2 ? "#2e5e30" : "#1a3a1a";
+    // Farbschema: grün = normal, dunkelrot = stark
+    var ratio = z.hp / z.maxHp; // 1.0 = voll, 0.0 = fast tot
+
+    var bodyColor, headColor;
+    if (z.strong) {
+      // Starker Zombie: dunkelrot, wird schwärzer bei Schaden
+      bodyColor = ratio > 0.6 ? "#7f0000" : ratio > 0.3 ? "#5c0000" : "#2a0000";
+      headColor = ratio > 0.6 ? "#b71c1c" : ratio > 0.3 ? "#880000" : "#4a0000";
+    } else {
+      // Normaler Zombie: grün, wird schwärzer bei Schaden
+      bodyColor = ratio > 0.6 ? "#2e7d32" : ratio > 0.3 ? "#1b5e20" : "#0a2e0a";
+      headColor = ratio > 0.6 ? "#388e3c" : ratio > 0.3 ? "#2e5e30" : "#1a3a1a";
+    }
+
+    // Kopfhöhe und Körper-Startpunkt proportional zur Zombie-Größe
+    var headH  = Math.round(z.height * 0.35); // ~35% Kopf
+    var bodyY  = Math.round(z.height * 0.30); // Körper startet bei 30%
 
     // Körper
     ctx.fillStyle = bodyColor;
-    ctx.fillRect(zx, zy+16, z.width, 32);
+    ctx.fillRect(zx, zy + bodyY, z.width, z.height - bodyY);
     // Kopf
     ctx.fillStyle = headColor;
-    ctx.fillRect(zx+1, zy, z.width-2, 18);
+    ctx.fillRect(zx + 1, zy, z.width - 2, headH);
 
-    // Augen – bei 1 HP ein Auge "zu" (X-Auge)
-    ctx.fillStyle = "#e53935";
-    ctx.fillRect(zx+3,  zy+5, 5, 5);
-    if (z.hp > 1) {
-      ctx.fillRect(zx+14, zy+5, 5, 5);
+    // Augen (immer 2, bei letztem Viertel HP ein X-Auge)
+    var eyeSize = z.strong ? 6 : 5;
+    ctx.fillStyle = z.strong ? "#ff1744" : "#e53935"; // starker Zombie leuchtet heller
+    ctx.fillRect(zx + 3, zy + 5, eyeSize, eyeSize);
+    if (ratio > 0.25) {
+      ctx.fillRect(zx + z.width - eyeSize - 3, zy + 5, eyeSize, eyeSize);
     } else {
-      // Auge zu: kleines X
-      ctx.strokeStyle = "#e53935";
+      // Auge zu: X
+      ctx.strokeStyle = z.strong ? "#ff1744" : "#e53935";
       ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(zx+13, zy+5); ctx.lineTo(zx+19, zy+10); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(zx+19, zy+5); ctx.lineTo(zx+13, zy+10); ctx.stroke();
+      var ex = zx + z.width - eyeSize - 3;
+      ctx.beginPath(); ctx.moveTo(ex, zy+5); ctx.lineTo(ex+eyeSize, zy+5+eyeSize); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(ex+eyeSize, zy+5); ctx.lineTo(ex, zy+5+eyeSize); ctx.stroke();
       ctx.lineWidth = 1;
     }
 
+    // Starker Zombie: kleine Hörner auf dem Kopf
+    if (z.strong) {
+      ctx.fillStyle = "#4a0000";
+      ctx.fillRect(zx + 5,           zy - 5, 4, 6); // linkes Horn
+      ctx.fillRect(zx + z.width - 9, zy - 5, 4, 6); // rechtes Horn
+    }
+
     // Arme ausgestreckt
+    var armW = z.strong ? 13 : 10;
+    var armH = z.strong ? 8  : 6;
     ctx.fillStyle = bodyColor;
     if (z.dir >= 0) {
-      ctx.fillRect(zx + z.width, zy+18, 10, 6);
+      ctx.fillRect(zx + z.width, zy + bodyY + 2, armW, armH);
     } else {
-      ctx.fillRect(zx - 10, zy+18, 10, 6);
+      ctx.fillRect(zx - armW, zy + bodyY + 2, armW, armH);
     }
 
     // --- Wunden als rote Schnitte ---
     ctx.strokeStyle = "#cc0000";
     ctx.lineWidth   = 2;
 
-    if (z.hp <= 2) {
+    if (ratio <= 0.65) {
       // Erste Wunde: Schnitt quer über den Körper
       ctx.beginPath();
-      ctx.moveTo(zx + 2,  zy + 20);
-      ctx.lineTo(zx + 16, zy + 32);
+      ctx.moveTo(zx + 2,           zy + bodyY + 4);
+      ctx.lineTo(zx + z.width - 4, zy + bodyY + 16);
       ctx.stroke();
-      // Blutfleck
       ctx.fillStyle = "rgba(180,0,0,0.55)";
-      ctx.fillRect(zx + 5, zy + 22, 7, 4);
+      ctx.fillRect(zx + 5, zy + bodyY + 6, 7, 4);
     }
-
-    if (z.hp <= 1) {
+    if (ratio <= 0.30) {
       // Zweite Wunde: Schnitt über den Kopf
       ctx.beginPath();
-      ctx.moveTo(zx + 4,  zy + 2);
-      ctx.lineTo(zx + 17, zy + 13);
+      ctx.moveTo(zx + 4,           zy + 2);
+      ctx.lineTo(zx + z.width - 3, zy + headH - 2);
       ctx.stroke();
-      // Dritte Wunde: zweiter Körperschnitt
+      // Dritte Wunde
       ctx.beginPath();
-      ctx.moveTo(zx + 14, zy + 26);
-      ctx.lineTo(zx + 3,  zy + 38);
+      ctx.moveTo(zx + z.width - 4, zy + bodyY + 18);
+      ctx.lineTo(zx + 3,           zy + z.height - 8);
       ctx.stroke();
-      // Blutflecken
       ctx.fillStyle = "rgba(180,0,0,0.6)";
-      ctx.fillRect(zx + 7,  zy + 4,  6, 3);
-      ctx.fillRect(zx + 4,  zy + 34, 8, 3);
+      ctx.fillRect(zx + 6, zy + 3, 6, 3);
       // Dunkle Überlagerung – sieht schwer verletzt aus
       ctx.fillStyle = "rgba(0,0,0,0.28)";
       ctx.fillRect(zx, zy, z.width, z.height);
@@ -1106,11 +1140,11 @@ function drawZombies() {
 
     ctx.lineWidth = 1;
 
-    // HP-Balken über dem Zombie
+    // HP-Balken über dem Zombie (starker Zombie: orangefarbener Balken)
     ctx.fillStyle = "#333";
-    ctx.fillRect(zx, zy-8, z.width, 5);
-    ctx.fillStyle = "#e53935";
-    ctx.fillRect(zx, zy-8, Math.floor(z.width * z.hp / z.maxHp), 5);
+    ctx.fillRect(zx, zy - 8, z.width, 5);
+    ctx.fillStyle = z.strong ? "#ff6d00" : "#e53935";
+    ctx.fillRect(zx, zy - 8, Math.floor(z.width * ratio), 5);
   }
 }
 
@@ -1258,51 +1292,61 @@ function updateWater() {
     }
   }
 
-  // ── Schritt 2: Niveau ausgleichen (alle 4 Frames, 8 Durchläufe) ─────────────
-  // Wasser gleicht sich mit direkten Nachbarn aus → flache Oberfläche
-  // 8 Durchläufe pro Tick → Wasser kann bis zu 8 Tiles weit pro Tick fließen
+  // ── Schritt 2: Sofort-Ausgleich (alle 4 Frames) ──────────────────────────
+  // Zusammenhängende Wasserfläche in einer Zeile wird SOFORT auf gleiches Niveau gebracht.
+  // Statt 8 Einzel-Schritte: das ganze Segment auf einmal berechnen → keine Treppe mehr!
   if (waterTick % 4 !== 0) return;
 
-  for (var pass = 0; pass < 8; pass++) {
-    // Bewegungs-Merker zurücksetzen (jeder Durchlauf ist unabhängig)
-    for (var r = 0; r < WORLD_ROWS; r++)
-      for (var c = 0; c < WORLD_COLS; c++)
-        waterMoved[r][c] = false;
+  // waterMoved als "bereits verarbeitet"-Merker nutzen
+  for (var r = 0; r < WORLD_ROWS; r++)
+    for (var c = 0; c < WORLD_COLS; c++)
+      waterMoved[r][c] = false;
 
-    for (var row = WORLD_ROWS - 2; row >= 0; row--) {
-      for (var col = 1; col < WORLD_COLS - 1; col++) {
-        if (world[row][col] !== WATER) continue;
-        if (waterMoved[row][col]) continue;        // schon in diesem Durchlauf bewegt
-        if (world[row + 1][col] === AIR) continue; // fällt noch → Schritt 1 kümmert sich
+  for (var row = WORLD_ROWS - 2; row >= 0; row--) {
+    for (var col = 1; col < WORLD_COLS - 1; col++) {
+      if (waterMoved[row][col]) continue;        // schon verarbeitet
+      if (world[row][col] !== WATER) continue;   // kein Wasser hier
+      if (world[row + 1][col] === AIR) continue; // fällt noch → Schritt 1
 
-        var L = wLevel[row][col];
-        if (L <= 0) { removeWater(row, col); continue; }
+      // ── Segment-Grenzen ermitteln ─────────────────────────────────────────
+      // Wie weit geht das zusammenhängende Wasser/Luft-Gebiet in dieser Zeile?
+      // Wir gehen so weit, bis eine Wand (fester Block) kommt.
+      // Luft-Tiles über einem Abgrund werden auch mitgenommen → das Wasser
+      // läuft seitlich raus und fällt dann mit Schritt 1 nach unten (Wasserfall!)
+      var segStart = col;
+      while (segStart > 1 &&
+             (world[row][segStart - 1] === WATER || world[row][segStart - 1] === AIR)) {
+        segStart--;
+      }
+      var segEnd = col;
+      while (segEnd < WORLD_COLS - 2 &&
+             (world[row][segEnd + 1] === WATER || world[row][segEnd + 1] === AIR)) {
+        segEnd++;
+      }
 
-        // Füll-Niveau der direkten Nachbarn (999 = Wand blockiert)
-        var leftL  = (world[row][col - 1] === WATER) ? wLevel[row][col - 1]
-                   : (world[row][col - 1] === AIR   ? 0 : 999);
-        var rightL = (world[row][col + 1] === WATER) ? wLevel[row][col + 1]
-                   : (world[row][col + 1] === AIR   ? 0 : 999);
+      // ── Alle Tiles im Segment sammeln + Gesamtmenge zählen ───────────────
+      var tiles = [];
+      var total = 0;
+      for (var sc = segStart; sc <= segEnd; sc++) {
+        waterMoved[row][sc] = true;
+        tiles.push(sc);
+        if (world[row][sc] === WATER) total += wLevel[row][sc];
+      }
 
-        // Fließt nur wenn Unterschied ≥ 2 → kein ewiges Hin-und-Her
-        var canLeft  = leftL  !== 999 && leftL  <= L - 2;
-        var canRight = rightL !== 999 && rightL <= L - 2;
+      if (total === 0) continue; // leeres Segment, nichts zu tun
 
-        var flowDir = 0;
-        if      (canLeft && canRight) flowDir = (leftL <= rightL) ? -1 : 1;
-        else if (canLeft)             flowDir = -1;
-        else if (canRight)            flowDir =  1;
-
-        if (flowDir !== 0) {
-          var nc = col + flowDir;
-          var neighborL = (flowDir === -1) ? leftL : rightL;
-          // Halbe Differenz übertragen → [8,0]→[4,4] in 1 Durchlauf, kein Hin-und-Her
-          var flowAmount = Math.floor((L - neighborL) / 2);
-          if (flowAmount < 1) flowAmount = 1;
-          wLevel[row][col] -= flowAmount;
-          addWater(row, nc, flowAmount);
-          waterMoved[row][nc] = true;
-          if (wLevel[row][col] <= 0) removeWater(row, col);
+      // ── Wasser gleichmäßig verteilen ─────────────────────────────────────
+      // Beispiel: 7 Tiles mit insgesamt 28 Wasser → jedes Tile bekommt 4
+      var avg = Math.floor(total / tiles.length);
+      var rem = total - avg * tiles.length; // Rest: erste rem Tiles bekommen 1 mehr
+      for (var ti = 0; ti < tiles.length; ti++) {
+        var lvl = avg + (ti < rem ? 1 : 0);
+        var tc  = tiles[ti];
+        if (lvl > 0) {
+          world[row][tc]  = WATER;
+          wLevel[row][tc] = Math.min(8, lvl);
+        } else {
+          if (world[row][tc] === WATER) removeWater(row, tc);
         }
       }
     }
