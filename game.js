@@ -228,9 +228,63 @@ function spawnGroup() {
   }
 }
 
+// Zombies an der Oberfläche spawnen (nachts)
+function spawnGroupSurface() {
+  for (var attempt = 0; attempt < 150; attempt++) {
+    var baseCol = Math.floor(1 + Math.random() * (WORLD_COLS - 2));
+    // Oberfläche finden: erste solide Zeile von oben, die oben Luft hat
+    var surfRow = -1;
+    for (var r = 2; r < 14; r++) {
+      if (isSolid(world[r][baseCol]) && world[r-1][baseCol] === AIR) {
+        surfRow = r - 2; // 2 Zeilen über dem Boden
+        break;
+      }
+    }
+    if (surfRow < 0) continue;
+    if (!addZombieAt(baseCol, surfRow)) continue;
+    // Noch 1–3 weitere Zombies daneben
+    var extra = 1 + Math.floor(Math.random() * 3);
+    for (var g = 0; g < extra; g++) {
+      var dc = Math.floor(Math.random() * 7) - 3;
+      var c  = Math.max(1, Math.min(WORLD_COLS - 2, baseCol + dc));
+      addZombieAt(c, surfRow);
+    }
+    return;
+  }
+}
+
 // Beim Start 2 Gruppen spawnen
 spawnGroup();
 spawnGroup();
+
+// ------------------------------------------------------------
+// Tag-Nacht-Zyklus
+// ------------------------------------------------------------
+var DAY_MS        = 60000;      // 1 Minute = 60 000 ms
+var dayStartTime  = Date.now(); // Spielstart = Tagesbeginn
+var nightSpawnTimer = Date.now();
+
+// Wie weit sind wir im Zyklus? 0.0 = Tagesbeginn, 0.5 = Nachtbeginn, 1.0 = nächster Tag
+function getDayProgress() {
+  var elapsed = (Date.now() - dayStartTime) % (DAY_MS * 2);
+  return elapsed / (DAY_MS * 2);
+}
+
+// Ist gerade Nacht?
+function isNight() {
+  return getDayProgress() >= 0.5;
+}
+
+// Helligkeit: 1.0 = voller Tag, 0.0 = Mitternacht
+function getSkyBrightness() {
+  var p = getDayProgress();
+  // Übergang Tag→Nacht: p = 0.4..0.5 (letzte 6 Sek des Tags)
+  if (p < 0.4)  return 1.0;
+  if (p < 0.5)  return 1 - (p - 0.4) / 0.1;
+  // Übergang Nacht→Tag: p = 0.9..1.0 (letzte 6 Sek der Nacht)
+  if (p < 0.9)  return 0.0;
+  return (p - 0.9) / 0.1;
+}
 
 // ------------------------------------------------------------
 // Inventar + Block-Auswahl
@@ -467,7 +521,9 @@ function restartGame() {
   zombies = [];
   spawnGroup();
   spawnGroup();
-  zombieSpawnTimer = Date.now();
+  zombieSpawnTimer  = Date.now();
+  dayStartTime      = Date.now(); // neuer Tag nach Neustart
+  nightSpawnTimer   = Date.now();
   updateCamera();
 }
 
@@ -708,18 +764,116 @@ function update() {
   }
 
   updateCamera();
+
+  // --- Zombies an der Oberfläche verbrennen bei Tag ---
+  // (Zombies in Zeile < 14 sind an der Oberfläche, nicht in Höhlen)
+  var bright = getSkyBrightness();
+  if (bright > 0.5) {
+    for (var bi = zombies.length - 1; bi >= 0; bi--) {
+      var bz = zombies[bi];
+      var zMidRow = Math.floor((bz.y + bz.height * 0.5) / TILE);
+      if (zMidRow < 14) {
+        // Zombie verbrennt: 3 HP → stirbt in ca. 1,5 Sekunden bei vollem Tag
+        bz.hp -= 0.03 * bright;
+        if (bz.hp <= 0) zombies.splice(bi, 1);
+      }
+    }
+  }
+
+  // --- Nachts: Zombies auch an der Oberfläche spawnen ---
+  if (isNight() && zombies.length < MAX_ZOMBIES && Date.now() - nightSpawnTimer > 5000) {
+    spawnGroupSurface();
+    nightSpawnTimer = Date.now();
+  }
 }
 
 // ------------------------------------------------------------
 // Zeichnen
 // ------------------------------------------------------------
 function drawBackground() {
-  // Je tiefer, desto dunkler (Himmel → Höhle)
-  var depth = Math.min(1, cameraY / (WORLD_ROWS * TILE * 0.6));
-  var r = Math.round(135 * (1 - depth));
-  var g = Math.round(185 * (1 - depth));
-  var b = Math.round(235 * (1 - depth));
-  ctx.fillStyle = "rgb(" + Math.max(5,r) + "," + Math.max(5,g) + "," + Math.max(10,b) + ")";
+  var bright = getSkyBrightness();
+  // Je tiefer die Kamera → dunkler (Höhle), außerdem Tag/Nacht-Helligkeit
+  var depth  = Math.min(1, cameraY / (WORLD_ROWS * TILE * 0.6));
+  var sky    = 1 - depth;  // 1 = oben, 0 = ganz unten
+
+  // Tag: hellblau (135, 185, 235) — Nacht: fast schwarz (5, 5, 20)
+  var cr = Math.round((135 * bright +  5 * (1 - bright)) * sky);
+  var cg = Math.round((185 * bright +  5 * (1 - bright)) * sky);
+  var cb = Math.round((235 * bright + 20 * (1 - bright)) * sky);
+  ctx.fillStyle = "rgb(" + Math.max(5,cr) + "," + Math.max(5,cg) + "," + Math.max(10,cb) + ")";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Sterne: nur bei Nacht, wenn Kamera oben ist
+  if (bright < 0.8 && cameraY < WORLD_ROWS * TILE * 0.2) {
+    var starAlpha = (1 - bright) * 0.9;
+    ctx.fillStyle = "rgba(255,255,255," + starAlpha + ")";
+    // Feste Sterne (mit seed damit sie nicht flackern)
+    for (var si = 0; si < 40; si++) {
+      var sx2 = ((si * 137 + 31) % canvas.width);
+      var sy2 = ((si * 89  + 17) % (canvas.height * 0.55));
+      ctx.fillRect(sx2, sy2, si % 3 === 0 ? 2 : 1, si % 3 === 0 ? 2 : 1);
+    }
+  }
+}
+
+// Sonne bei Tag, Mond bei Nacht zeichnen
+function drawSunMoon() {
+  var p = getDayProgress();  // 0..1 im Zyklus
+
+  if (!isNight()) {
+    // ── Sonne ──────────────────────────────────────────
+    var sunPhase = p * 2;          // 0 = Tagesanfang, 1 = Tagesende
+    var sunX = sunPhase * (canvas.width + 80) - 40;
+    // Bogen: links unten → oben Mitte → rechts unten
+    var sunY = canvas.height * 0.18 - Math.sin(sunPhase * Math.PI) * (canvas.height * 0.22);
+
+    // Leuchtschein
+    ctx.fillStyle = "rgba(255, 230, 80, 0.25)";
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, 52, 0, Math.PI * 2);
+    ctx.fill();
+    // Sonne selbst
+    ctx.fillStyle = "#FFD700";
+    ctx.beginPath();
+    ctx.arc(sunX, sunY, 30, 0, Math.PI * 2);
+    ctx.fill();
+    // Helles Zentrum
+    ctx.fillStyle = "#FFF9C4";
+    ctx.beginPath();
+    ctx.arc(sunX - 6, sunY - 6, 10, 0, Math.PI * 2);
+    ctx.fill();
+
+  } else {
+    // ── Mond ───────────────────────────────────────────
+    var moonPhase = (p - 0.5) * 2; // 0 = Nachtanfang, 1 = Nachtende
+    var moonX = moonPhase * (canvas.width + 80) - 40;
+    var moonY = canvas.height * 0.18 - Math.sin(moonPhase * Math.PI) * (canvas.height * 0.22);
+
+    // Mond (voller Kreis)
+    ctx.fillStyle = "#D0D0B0";
+    ctx.beginPath();
+    ctx.arc(moonX, moonY, 26, 0, Math.PI * 2);
+    ctx.fill();
+    // Sichelschatten (lässt Mond wie eine Sichel aussehen)
+    var skyColor = getSkyBrightness() < 0.3
+      ? "rgb(5,5,20)" : "rgb(15,15,40)";
+    ctx.fillStyle = skyColor;
+    ctx.beginPath();
+    ctx.arc(moonX + 10, moonY - 3, 21, 0, Math.PI * 2);
+    ctx.fill();
+    // Krater
+    ctx.fillStyle = "rgba(160,160,130,0.6)";
+    ctx.beginPath(); ctx.arc(moonX - 6, moonY + 5, 3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(moonX + 3, moonY - 8, 4, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+// Dunkles Overlay über die Welt legen (macht Tag/Nacht-Effekt)
+function drawNightOverlay() {
+  var b = getSkyBrightness();
+  if (b >= 1) return;           // voller Tag → kein Overlay nötig
+  var alpha = (1 - b) * 0.70;  // max 70% dunkel bei Mitternacht
+  ctx.fillStyle = "rgba(0, 0, 30, " + alpha + ")";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 }
 
@@ -1146,8 +1300,10 @@ function updateWater() {
 // ------------------------------------------------------------
 function gameLoop() {
   updateWater();
-  drawBackground();
-  drawWorld();
+  drawBackground();   // Himmel (Farbe je nach Tag/Nacht)
+  drawSunMoon();      // Sonne oder Mond zeichnen
+  drawWorld();        // Blöcke zeichnen
+  drawNightOverlay(); // Dunkel-Overlay bei Nacht
   drawTarget();
   drawZombies();
   drawPlayer();
