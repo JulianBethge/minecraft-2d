@@ -20,11 +20,13 @@ var REACH      = 4;    // Reichweite in Tiles
 // Block-Typen
 // ------------------------------------------------------------
 var AIR = 0, GRASS = 1, DIRT = 2, STONE = 3, WOOD = 4, LEAVES = 5, WATER = 6;
+var DIAMOND_ORE = 7; // Neuer Block: Diamant-Erz (tief unten, braucht Spitzhacke)
 
 var COLORS = {};
-COLORS[GRASS]  = "#6ab04c"; COLORS[DIRT]   = "#9b5e28";
-COLORS[STONE]  = "#808080"; COLORS[WOOD]   = "#7a5230";
-COLORS[LEAVES] = "#2e8b2e"; COLORS[WATER]  = "#2980b9";
+COLORS[GRASS]       = "#6ab04c"; COLORS[DIRT]       = "#9b5e28";
+COLORS[STONE]       = "#808080"; COLORS[WOOD]       = "#7a5230";
+COLORS[LEAVES]      = "#2e8b2e"; COLORS[WATER]      = "#2980b9";
+COLORS[DIAMOND_ORE] = "#808080"; // Grau wie Stein, aber mit blauen Flecken
 
 // ------------------------------------------------------------
 // Sound-System (Web Audio API – keine Dateien nötig, alles generiert)
@@ -84,9 +86,9 @@ function sndDeath()       { playTone(100, "sawtooth", 0.18, 0.5, 35); playTone(5
 function sndShoot()       { playNoise(0.07, 0.07, 5000); playTone(300, "sine", 0.05, 0.06, 250); }
 
 var NAMES = {};
-NAMES[GRASS]  = "Gras";  NAMES[DIRT]   = "Erde";
-NAMES[STONE]  = "Stein"; NAMES[WOOD]   = "Holz";
-NAMES[LEAVES] = "Blätter";
+NAMES[GRASS]       = "Gras";    NAMES[DIRT]       = "Erde";
+NAMES[STONE]       = "Stein";   NAMES[WOOD]       = "Holz";
+NAMES[LEAVES]      = "Blätter"; NAMES[DIAMOND_ORE]= "Diamant-Erz";
 
 // ------------------------------------------------------------
 // Welt generieren: Terrain + Höhlen
@@ -158,6 +160,15 @@ function generateWorld() {
                   Math.sin(col * 0.63 + row * 0.21 + seed) * 0.7 +
                   Math.sin(col * 0.12 + row * 0.55 + seed * 0.3) * 0.5;
       if (noise > 0.55) world[row][col] = AIR;
+    }
+  }
+
+  // Diamant-Erz: selten, nur tief unter der Erde (ab Zeile 28)
+  for (var row = 28; row < WORLD_ROWS - 3; row++) {
+    for (var col = 2; col < WORLD_COLS - 2; col++) {
+      if (world[row][col] === STONE && Math.random() < 0.012) {
+        world[row][col] = DIAMOND_ORE;
+      }
     }
   }
 
@@ -550,9 +561,23 @@ function getSkyBrightness() {
 // Inventar + Block-Auswahl
 // ------------------------------------------------------------
 var inventory = {};
-inventory[GRASS] = 0; inventory[DIRT] = 0; inventory[STONE] = 0;
-inventory[WOOD]  = 0; inventory[LEAVES] = 0;
-var selectedBlock = WOOD;
+inventory[GRASS]  = 0; inventory[DIRT]   = 0; inventory[STONE] = 0;
+inventory[WOOD]   = 0; inventory[LEAVES] = 0;
+// Neue Items (kein Block, nur gezählt im Inventar)
+inventory["diamond"]  = 0;  // Diamanten
+inventory["pickaxe"]  = 0;  // Spitzhacke (0=nicht gebaut, 1=gebaut)
+inventory["sword_up"] = 0;  // Schwert-Upgrade
+inventory["bow"]      = 0;  // Bogen
+inventory["arrow"]    = 0;  // Pfeile (Anzahl)
+
+// Hotbar: 6 Slots — 3 Blöcke + 3 Werkzeuge
+// Slot 0–2: Blöcke zum Bauen (WOOD, STONE, DIRT)
+// Slot 3: Spitzhacke  Slot 4: Schwert (/ Schwert+)  Slot 5: Bogen
+var selectedSlot  = 0;  // aktuell ausgewählter Hotbar-Slot
+var selectedBlock = WOOD; // für Blöcke (Slots 0-2)
+
+// Crafting-Menü
+var craftingOpen = false;
 
 // ------------------------------------------------------------
 // Handy-Erkennung
@@ -573,9 +598,15 @@ var mobileMode = "fight";
 var keys = {};
 document.addEventListener("keydown", function(e) {
   keys[e.key.toLowerCase()] = true;
-  if (e.key === "1") selectedBlock = WOOD;
-  if (e.key === "2") selectedBlock = STONE;
-  if (e.key === "3") selectedBlock = DIRT;
+  // Hotbar-Slots mit Tasten 1–6 wählen
+  if (e.key === "1") { selectedSlot = 0; selectedBlock = WOOD; }
+  if (e.key === "2") { selectedSlot = 1; selectedBlock = STONE; }
+  if (e.key === "3") { selectedSlot = 2; selectedBlock = DIRT; }
+  if (e.key === "4") { selectedSlot = 3; } // Spitzhacke
+  if (e.key === "5") { selectedSlot = 4; } // Schwert
+  if (e.key === "6") { selectedSlot = 5; } // Bogen
+  // E = Crafting-Menü öffnen/schließen
+  if (e.key.toLowerCase() === "e") craftingOpen = !craftingOpen;
   if (e.key.toLowerCase() === "r" && player.dead) restartGame();
 });
 document.addEventListener("keyup", function(e) { keys[e.key.toLowerCase()] = false; });
@@ -614,27 +645,47 @@ function isPosInRange(col, row) {
 
 // Tap auf die Hotbar-Felder? (nur für Handy, damit man Material wählen kann)
 function tapOnHotbar(x, y) {
-  var slots = [WOOD, STONE, DIRT];
-  var size  = 36, gap = 6;
-  var total = slots.length * (size + gap) - gap;
+  var slotBlocks = [WOOD, STONE, DIRT];
+  var size = 36, gap = 5;
+  var total = 6 * (size + gap) - gap;
   var sx = Math.floor((canvas.width - total) / 2);
   var hy = canvas.height - size - 8;
   if (y < hy || y > hy + size) return false;
-  for (var i = 0; i < slots.length; i++) {
+  for (var i = 0; i < 6; i++) {
     var bx = sx + i * (size + gap);
     if (x >= bx && x <= bx + size) {
-      selectedBlock = slots[i];
+      selectedSlot = i;
+      if (i < 3) selectedBlock = slotBlocks[i];
       return true;
     }
   }
   return false;
 }
 
-// Aktion: schlagen / Block abbauen
+// Aktion: schlagen / Block abbauen / Pfeil schießen
 function attackAt(pos) {
   if (player.dead) return;
+
+  // Bogen-Slot: Pfeil schießen statt schlagen
+  if (selectedSlot === 5 && inventory["bow"] > 0 && inventory["arrow"] > 0) {
+    var aFromX = player.x + player.width  / 2;
+    var aFromY = player.y + player.height * 0.35;
+    var aToX   = pos.worldX, aToY = pos.worldY;
+    var ddx = aToX - aFromX, ddy = aToY - aFromY;
+    var len = Math.sqrt(ddx*ddx + ddy*ddy); if (len < 1) len = 1;
+    arrows.push({ x: aFromX, y: aFromY,
+      vx: (ddx/len)*8, vy: (ddy/len)*8 - 1.5,
+      damage: 2, strong: false, life: 200, fromPlayer: true });
+    inventory["arrow"]--;
+    sndShoot();
+    return;
+  }
+
   player.swingTimer = Date.now();
   sndSwing(); // Schwingen-Geräusch immer
+
+  // Schwert-Schaden: normal=1, mit Upgrade=3
+  var swordDmg = inventory["sword_up"] > 0 ? 3 : 1;
 
   // Zuerst gucken ob ein Zombie getroffen wird
   var hitZombie = false;
@@ -648,7 +699,7 @@ function attackAt(pos) {
     var zy = z.y + z.height / 2;
     var dist = Math.sqrt((px-zx)*(px-zx) + (py-zy)*(py-zy));
     if (cursorOnZombie && dist < REACH * TILE) {
-      z.hp--;
+      z.hp -= swordDmg;
       sndHitZombie();
       hitZombie = true;
       if (z.hp <= 0) zombies.splice(i, 1);
@@ -669,7 +720,7 @@ function attackAt(pos) {
       var syC = s.y + s.height / 2;
       var distS = Math.sqrt((pxS-sxC)*(pxS-sxC) + (pyS-syC)*(pyS-syC));
       if (cursorOnSk && distS < REACH * TILE) {
-        s.hp--;
+        s.hp -= swordDmg;
         sndHitSkeleton();
         hitSkeleton = true;
         if (s.hp <= 0) skeletons.splice(si, 1);
@@ -691,7 +742,7 @@ function attackAt(pos) {
       var cyC = cr.y + cr.height / 2;
       var distC = Math.sqrt((pxC-cxC)*(pxC-cxC) + (pyC-cyC)*(pyC-cyC));
       if (cursorOnCr && distC < REACH * TILE) {
-        cr.hp--;
+        cr.hp -= swordDmg;
         hitCreeper = true;
         if (cr.hp <= 0) creepers.splice(ci, 1);
         else sndHitZombie();
@@ -704,9 +755,22 @@ function attackAt(pos) {
     if (!isPosInRange(pos.col, pos.row)) return;
     var type = getTile(pos.col, pos.row);
     if (type !== AIR && type !== WATER) {
-      world[pos.row][pos.col] = AIR;
-      sndBlockBreak();
-      if (inventory[type] !== undefined) inventory[type]++;
+      // Diamant-Erz braucht eine Spitzhacke!
+      if (type === DIAMOND_ORE) {
+        if (inventory["pickaxe"] < 1) {
+          // Kurzes visuelles Feedback: Ziel blinkt (keinen Block abbauen)
+          player.noPickaxeFlash = Date.now();
+          return;
+        }
+        // Mit Spitzhacke: 1 Diamant bekommen
+        world[pos.row][pos.col] = AIR;
+        sndBlockBreak();
+        inventory["diamond"]++;
+      } else {
+        world[pos.row][pos.col] = AIR;
+        sndBlockBreak();
+        if (inventory[type] !== undefined) inventory[type]++;
+      }
     }
   }
 }
@@ -743,6 +807,13 @@ canvas.addEventListener("mousemove", function(e) {
 // Linksklick (Desktop): schlagen / abbauen
 canvas.addEventListener("click", function(e) {
   var pos = getCanvasPos(e);
+
+  // Crafting-Menü offen? → Klick auf Rezept-Buttons prüfen
+  if (craftingOpen) {
+    tryCraftClick(pos.x, pos.y);
+    return;
+  }
+
   // Auf Handy: erst Hotbar-Tap prüfen, dann je nach Modus
   if (isMobile()) {
     if (tapOnHotbar(pos.x, pos.y)) return;
@@ -755,11 +826,14 @@ canvas.addEventListener("click", function(e) {
   attackAt(pos);
 });
 
-// Rechtsklick (Desktop): Block setzen
+// Rechtsklick (Desktop): Block setzen (nur wenn Block-Slot gewählt)
 canvas.addEventListener("contextmenu", function(e) {
   e.preventDefault();
-  var pos = getCanvasPos(e);
-  buildAt(pos);
+  if (craftingOpen) { craftingOpen = false; return; }
+  if (selectedSlot <= 2) {
+    var pos = getCanvasPos(e);
+    buildAt(pos);
+  }
 });
 
 // ------------------------------------------------------------
@@ -811,7 +885,7 @@ setupMobileControls();
 // Hilfsfunktionen
 // ------------------------------------------------------------
 function isSolid(type) {
-  return type === GRASS || type === DIRT || type === STONE || type === WOOD;
+  return type === GRASS || type === DIRT || type === STONE || type === WOOD || type === DIAMOND_ORE;
 }
 function getTile(col, row) {
   if (col < 0 || col >= WORLD_COLS || row < 0 || row >= WORLD_ROWS) return STONE;
@@ -826,6 +900,8 @@ function restartGame() {
   player.velocityY = 0; player.onGround = false;
   player.hp = 10; player.dead = false; player.lastRegen = Date.now();
   for (var k in inventory) inventory[k] = 0;
+  selectedSlot = 0;
+  craftingOpen = false;
   zombies = [];
   spawnGroup();
   spawnGroup();
@@ -1250,14 +1326,49 @@ function update() {
     a.y  += a.vy;
     a.life--;
 
-    // Treffer Spieler?
-    if (a.x >= player.x && a.x <= player.x + player.width &&
-        a.y >= player.y && a.y <= player.y + player.height) {
-      player.hp -= a.damage;
-      if (player.hp <= 0) { player.hp = 0; player.dead = true; sndDeath(); }
-      else sndArrowHit();
-      arrows.splice(ai, 1);
-      continue;
+    // Spieler-Pfeile (fromPlayer=true) treffen Gegner, nicht den Spieler selbst
+    if (a.fromPlayer) {
+      var arrowHit = false;
+      // Zombies treffen
+      for (var azi = zombies.length-1; azi >= 0; azi--) {
+        var az = zombies[azi];
+        if (a.x >= az.x && a.x <= az.x+az.width && a.y >= az.y && a.y <= az.y+az.height) {
+          az.hp -= a.damage; sndHitZombie();
+          if (az.hp <= 0) zombies.splice(azi, 1);
+          arrows.splice(ai, 1); arrowHit = true; break;
+        }
+      }
+      if (arrowHit) continue;
+      // Skelette treffen
+      for (var asi = skeletons.length-1; asi >= 0; asi--) {
+        var ask = skeletons[asi];
+        if (a.x >= ask.x && a.x <= ask.x+ask.width && a.y >= ask.y && a.y <= ask.y+ask.height) {
+          ask.hp -= a.damage; sndHitSkeleton();
+          if (ask.hp <= 0) skeletons.splice(asi, 1);
+          arrows.splice(ai, 1); arrowHit = true; break;
+        }
+      }
+      if (arrowHit) continue;
+      // Creeper treffen
+      for (var aci = creepers.length-1; aci >= 0; aci--) {
+        var acr = creepers[aci];
+        if (a.x >= acr.x && a.x <= acr.x+acr.width && a.y >= acr.y && a.y <= acr.y+acr.height) {
+          acr.hp -= a.damage; sndHitZombie();
+          if (acr.hp <= 0) creepers.splice(aci, 1);
+          arrows.splice(ai, 1); arrowHit = true; break;
+        }
+      }
+      if (arrowHit) continue;
+    } else {
+      // Gegner-Pfeile treffen den Spieler
+      if (a.x >= player.x && a.x <= player.x + player.width &&
+          a.y >= player.y && a.y <= player.y + player.height) {
+        player.hp -= a.damage;
+        if (player.hp <= 0) { player.hp = 0; player.dead = true; sndDeath(); }
+        else sndArrowHit();
+        arrows.splice(ai, 1);
+        continue;
+      }
     }
 
     // Treffer Wand?
@@ -1611,9 +1722,21 @@ function drawWorld() {
 
       ctx.fillStyle = COLORS[type];
       ctx.fillRect(x, y, TILE, TILE);
-      if (type === GRASS)  { ctx.fillStyle="rgba(144,224,80,1)";  ctx.fillRect(x,y,TILE,5); }
-      if (type === STONE)  { ctx.fillStyle="rgba(255,255,255,0.07)"; ctx.fillRect(x+4,y+4,TILE-8,TILE-8); }
-      if (type === LEAVES) { ctx.fillStyle="rgba(0,0,0,0.15)"; ctx.fillRect(x+5,y+5,9,9); ctx.fillRect(x+17,y+15,7,7); }
+      if (type === GRASS)       { ctx.fillStyle="rgba(144,224,80,1)";  ctx.fillRect(x,y,TILE,5); }
+      if (type === STONE)       { ctx.fillStyle="rgba(255,255,255,0.07)"; ctx.fillRect(x+4,y+4,TILE-8,TILE-8); }
+      if (type === LEAVES)      { ctx.fillStyle="rgba(0,0,0,0.15)"; ctx.fillRect(x+5,y+5,9,9); ctx.fillRect(x+17,y+15,7,7); }
+      if (type === DIAMOND_ORE) {
+        // Diamant-Erz: Stein-Basis + leuchtende blaue Kristalle
+        ctx.fillStyle="rgba(255,255,255,0.06)"; ctx.fillRect(x+4,y+4,TILE-8,TILE-8);
+        ctx.fillStyle="#29b6f6";
+        ctx.fillRect(x+4,  y+5,  6, 6);
+        ctx.fillRect(x+18, y+14, 5, 5);
+        ctx.fillRect(x+9,  y+20, 6, 6);
+        ctx.fillRect(x+22, y+6,  5, 5);
+        ctx.fillStyle="rgba(180,240,255,0.7)";
+        ctx.fillRect(x+5,  y+6,  2, 2);
+        ctx.fillRect(x+19, y+15, 2, 2);
+      }
       ctx.strokeStyle = "rgba(0,0,0,0.12)";
       ctx.strokeRect(x+0.5, y+0.5, TILE-1, TILE-1);
     }
@@ -1657,67 +1780,182 @@ function drawPlayer() {
     ctx.fillRect(px+17, py+6, 4, 4);
   }
 
-  // --- Schwertanimation ---
-  // Fortschritt: 0 = Angriff gerade gestartet, 1 = fertig
-  var elapsed  = Date.now() - player.swingTimer;
-  var progress = Math.min(1, elapsed / player.swingDuration);
-
-  // Drehpunkt: Schulter auf der Seite, in die der Spieler schaut
+  // --- Waffe zeichnen (je nach ausgewähltem Slot) ---
+  var elapsed   = Date.now() - player.swingTimer;
+  var progress  = Math.min(1, elapsed / player.swingDuration);
   var facingRight = (player.facing >= 0);
   var pivotX = facingRight ? px + player.width + 2 : px - 2;
   var pivotY = py + 26;
 
-  // Winkel: von -100° (Schwert oben) bis +50° (Schwert unten)
   var startAngle = -100 * Math.PI / 180;
   var endAngle   =   50 * Math.PI / 180;
-  // Ruhehaltung (kein Angriff): leicht nach unten
   var restAngle  =    8 * Math.PI / 180;
+  var angle = progress >= 1 ? restAngle : startAngle + progress * (endAngle - startAngle);
 
-  var angle = progress >= 1
-    ? restAngle
-    : startAngle + progress * (endAngle - startAngle);
-
-  // Halbtransparenter Schwungbogen während der Animation
-  if (progress < 1) {
+  if (selectedSlot === 5 && inventory["bow"] > 0) {
+    // ── BOGEN ────────────────────────────────────────────────────────────────
+    // Bogen wird seitlich gehalten, leicht nach vorne gestreckt
+    var bowPulled = progress < 1; // wird gerade geschossen
     ctx.save();
     ctx.translate(pivotX, pivotY);
-    if (!facingRight) ctx.scale(-1, 1);  // nach links spiegeln
-    ctx.strokeStyle = "rgba(255,255,255,0.25)";
-    ctx.lineWidth   = 8;
-    ctx.lineCap     = "round";
+    if (!facingRight) ctx.scale(-1, 1);
+
+    // Bogen-Bogen (gebogener Holzstab)
+    ctx.strokeStyle = "#8b5e2a";
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
     ctx.beginPath();
-    ctx.arc(0, 0, 20, startAngle, angle);
+    ctx.arc(12, 0, 18, -1.3, 1.3); // Halbkreis nach vorne
     ctx.stroke();
-    ctx.lineWidth = 1;
-    ctx.lineCap   = "butt";
+
+    // Sehne (gespannt = mehr gebogen beim Schuss)
+    var pullBack = bowPulled ? -8 : 0;
+    ctx.strokeStyle = "#ddd";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(12 + 18 * Math.cos(-1.3), 18 * Math.sin(-1.3)); // oberes Ende
+    ctx.lineTo(12 + pullBack, 0);                               // Mitte (gespannt)
+    ctx.lineTo(12 + 18 * Math.cos(1.3),  18 * Math.sin(1.3));  // unteres Ende
+    ctx.stroke();
+
+    // Pfeil auf der Sehne (wenn Pfeile vorhanden)
+    if (inventory["arrow"] > 0) {
+      ctx.strokeStyle = "#8d6e63";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(pullBack, 0);
+      ctx.lineTo(24, 0);
+      ctx.stroke();
+      // Pfeilspitze
+      ctx.fillStyle = "#78909c";
+      ctx.beginPath();
+      ctx.moveTo(25, 0);
+      ctx.lineTo(20, -3);
+      ctx.lineTo(20, 3);
+      ctx.fill();
+    }
+
+    ctx.lineWidth = 1; ctx.lineCap = "butt";
+    ctx.restore();
+
+  } else if (selectedSlot === 3 && inventory["pickaxe"] > 0) {
+    // ── SPITZHACKE ────────────────────────────────────────────────────────────
+    // Schwung-Bogen während der Animation
+    if (progress < 1) {
+      ctx.save();
+      ctx.translate(pivotX, pivotY);
+      if (!facingRight) ctx.scale(-1, 1);
+      ctx.strokeStyle = "rgba(180,120,60,0.3)";
+      ctx.lineWidth = 8; ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.arc(0, 0, 20, startAngle, angle);
+      ctx.stroke();
+      ctx.lineWidth = 1; ctx.lineCap = "butt";
+      ctx.restore();
+    }
+
+    ctx.save();
+    ctx.translate(pivotX, pivotY);
+    if (!facingRight) ctx.scale(-1, 1);
+    ctx.rotate(angle);
+
+    // Stiel (langer Holzgriff)
+    ctx.fillStyle = "#8b5e2a";
+    ctx.fillRect(-15, -2, 27, 4);
+    // Holzmaserung
+    ctx.fillStyle = "#6b4018";
+    ctx.fillRect(-15, 0, 27, 1);
+
+    // Kopf-Verbindungsstück (Metall, wo Stiel auf Klingen trifft)
+    ctx.fillStyle = "#787878";
+    ctx.fillRect(9, -5, 5, 10);
+    ctx.fillStyle = "#909090";
+    ctx.fillRect(10, -4, 3, 3);
+
+    // Obere Klinge (schräg nach oben-vorne, ~40°)
+    ctx.save();
+    ctx.translate(11, -3);
+    ctx.rotate(-0.65);           // ~37° nach oben
+    ctx.fillStyle = "#a0a0a0";
+    ctx.fillRect(0, -2, 16, 5);  // Klingenblatt
+    ctx.fillStyle = "#c8c8c8";   // Highlight oben
+    ctx.fillRect(0, -2, 16, 2);
+    ctx.fillStyle = "#d8d8d8";   // Spitze ganz hell
+    ctx.fillRect(13, -2, 3, 2);
+    ctx.restore();
+
+    // Untere Klinge (schräg nach unten-vorne, ~40°)
+    ctx.save();
+    ctx.translate(11, 3);
+    ctx.rotate(0.65);            // ~37° nach unten
+    ctx.fillStyle = "#a0a0a0";
+    ctx.fillRect(0, -2, 14, 5);  // Klingenblatt
+    ctx.fillStyle = "#c0c0c0";   // Highlight
+    ctx.fillRect(0, -2, 14, 2);
+    ctx.fillStyle = "#d0d0d0";   // Spitze
+    ctx.fillRect(11, -2, 3, 2);
+    ctx.restore();
+
+    ctx.restore();
+
+  } else {
+    // ── SCHWERT (Slots 0–2 und 4) ───────────────────────────────────────────
+    var upgraded = inventory["sword_up"] > 0;
+
+    // Schwung-Bogen während der Animation
+    if (progress < 1) {
+      ctx.save();
+      ctx.translate(pivotX, pivotY);
+      if (!facingRight) ctx.scale(-1, 1);
+      ctx.strokeStyle = upgraded ? "rgba(255,220,0,0.35)" : "rgba(255,255,255,0.25)";
+      ctx.lineWidth = 8; ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.arc(0, 0, 20, startAngle, angle);
+      ctx.stroke();
+      ctx.lineWidth = 1; ctx.lineCap = "butt";
+      ctx.restore();
+    }
+
+    ctx.save();
+    ctx.translate(pivotX, pivotY);
+    if (!facingRight) ctx.scale(-1, 1);
+    ctx.rotate(angle);
+
+    if (upgraded) {
+      // Gold-Schwert: goldene Klinge
+      ctx.fillStyle = "#ffd700"; // Gold
+      ctx.fillRect(2, -3, 20, 5);
+      ctx.fillStyle = "#fff9c4"; // Helle Spitze
+      ctx.fillRect(19, -2, 5, 3);
+      ctx.fillStyle = "#ff8f00"; // Orangegold Parierstange
+      ctx.fillRect(-1, -7, 4, 14);
+      ctx.fillStyle = "#7a5230";
+      ctx.fillRect(-12, -3, 12, 5);
+      ctx.fillStyle = "#ffd700";
+      ctx.beginPath();
+      ctx.arc(-13, 0, 4, 0, Math.PI * 2);
+      ctx.fill();
+      // Glanz-Punkt auf der Klinge
+      ctx.fillStyle = "rgba(255,255,255,0.7)";
+      ctx.fillRect(8, -2, 4, 2);
+    } else {
+      // Normal-Schwert: silber-grau
+      ctx.fillStyle = "#d4d4d4";
+      ctx.fillRect(2, -3, 20, 5);
+      ctx.fillStyle = "#f0f0f0";
+      ctx.fillRect(19, -2, 5, 3);
+      ctx.fillStyle = "#888";
+      ctx.fillRect(-1, -7, 4, 14);
+      ctx.fillStyle = "#7a5230";
+      ctx.fillRect(-12, -3, 12, 5);
+      ctx.fillStyle = "#a0703a";
+      ctx.beginPath();
+      ctx.arc(-13, 0, 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     ctx.restore();
   }
-
-  // Schwert zeichnen (rotiert um den Drehpunkt, gespiegelt wenn links)
-  ctx.save();
-  ctx.translate(pivotX, pivotY);
-  if (!facingRight) ctx.scale(-1, 1);  // nach links spiegeln
-  ctx.rotate(angle);
-
-  // Klinge (lang, hellgrau, vom Drehpunkt nach rechts)
-  ctx.fillStyle = "#d4d4d4";
-  ctx.fillRect(2, -3, 20, 5);
-  // Spitze etwas heller
-  ctx.fillStyle = "#f0f0f0";
-  ctx.fillRect(19, -2, 5, 3);
-  // Parierstange (quer zum Griff)
-  ctx.fillStyle = "#888";
-  ctx.fillRect(-1, -7, 4, 14);
-  // Griff (nach links vom Drehpunkt)
-  ctx.fillStyle = "#7a5230";
-  ctx.fillRect(-12, -3, 12, 5);
-  // Knauf am Ende
-  ctx.fillStyle = "#a0703a";
-  ctx.beginPath();
-  ctx.arc(-13, 0, 4, 0, Math.PI * 2);
-  ctx.fill();
-
-  ctx.restore();
 }
 
 function drawZombies() {
@@ -2059,39 +2297,226 @@ function drawHpBar() {
   ctx.fillText("HP: " + player.hp.toFixed(1) + " / " + player.maxHp, bx, by + bh + 14);
 }
 
-function drawInventory() {
-  var slots = [WOOD, STONE, DIRT, GRASS, LEAVES];
-  var sx = 8, sy = 8, sh = 22;
-  ctx.fillStyle = "rgba(0,0,0,0.45)";
-  ctx.fillRect(sx-4, sy-4, 120, slots.length * sh + 8);
-  for (var i = 0; i < slots.length; i++) {
-    var type = slots[i], y = sy + i * sh;
-    ctx.fillStyle = COLORS[type];  ctx.fillRect(sx, y, 14, 14);
-    ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.strokeRect(sx, y, 14, 14);
-    ctx.fillStyle = "#fff"; ctx.font = "12px monospace";
-    ctx.fillText(NAMES[type] + ": " + inventory[type], sx+18, y+11);
+// Crafting-Rezepte definieren
+var RECIPES = [
+  { name: "Spitzhacke",    key: "pickaxe",  max: 1,
+    cost: { 3: 10, 4: 4 },          // 10 Stein + 4 Holz
+    desc: "10 Stein + 4 Holz",      icon: "⛏" },
+  { name: "Schwert-Upgrade", key: "sword_up", max: 1,
+    cost: { diamond: 3 },           // 3 Diamanten
+    desc: "3 Diamanten",            icon: "⚔+" },
+  { name: "Bogen",         key: "bow",      max: 1,
+    cost: { 3: 5, diamond: 3 },     // 5 Stein + 3 Diamanten
+    desc: "5 Stein + 3 Diamanten",  icon: "🏹" },
+  { name: "5 Pfeile",      key: "arrow",    max: 999,
+    cost: { 4: 2, diamond: 1 },     // 2 Holz + 1 Diamant
+    desc: "2 Holz + 1 Diamant",     icon: "➶",  amount: 5 }
+];
+
+// Prüft ob genug Materialien vorhanden sind und führt Craft aus
+function canCraft(recipe) {
+  for (var k in recipe.cost) {
+    var have = (k === "diamond") ? inventory["diamond"] : inventory[parseInt(k)];
+    if (have < recipe.cost[k]) return false;
+  }
+  if (recipe.max === 1 && inventory[recipe.key] >= 1) return false;
+  return true;
+}
+
+function doCraft(recipe) {
+  if (!canCraft(recipe)) return;
+  for (var k in recipe.cost) {
+    var amount = recipe.cost[k];
+    if (k === "diamond") inventory["diamond"] -= amount;
+    else inventory[parseInt(k)] -= amount;
+  }
+  inventory[recipe.key] += recipe.amount || 1;
+  sndBlockPlace(); // Erfolgs-Sound
+}
+
+// Crafting-Klick: welchen Button hat der Spieler gedrückt?
+var _craftBtnY = []; // wird beim Zeichnen gefüllt
+function tryCraftClick(mx, my) {
+  var cx = Math.floor(canvas.width / 2) - 140;
+  for (var i = 0; i < RECIPES.length; i++) {
+    var by = _craftBtnY[i];
+    if (by && mx >= cx + 240 && mx <= cx + 310 && my >= by && my <= by + 26) {
+      doCraft(RECIPES[i]);
+    }
+  }
+  // Klick außerhalb → Menü schließen
+  var panelW = 320, panelH = RECIPES.length * 60 + 80;
+  var panelX = Math.floor(canvas.width  / 2) - panelW / 2;
+  var panelY = Math.floor(canvas.height / 2) - panelH / 2;
+  if (mx < panelX || mx > panelX + panelW || my < panelY || my > panelY + panelH) {
+    craftingOpen = false;
   }
 }
 
-function drawHotbar() {
-  var slots = [WOOD, STONE, DIRT], labels = ["1","2","3"];
-  var size = 36, gap = 6;
-  var total = slots.length * (size+gap) - gap;
-  var sx = Math.floor((canvas.width-total)/2), y = canvas.height-size-8;
-  for (var i = 0; i < slots.length; i++) {
-    var type = slots[i], x = sx + i*(size+gap);
-    ctx.fillStyle = (type===selectedBlock) ? "rgba(255,255,255,0.35)" : "rgba(0,0,0,0.45)";
-    ctx.fillRect(x, y, size, size);
-    ctx.fillStyle = COLORS[type]; ctx.fillRect(x+4, y+4, size-8, size-8);
-    if (type === selectedBlock) {
-      ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
-      ctx.strokeRect(x+1, y+1, size-2, size-2); ctx.lineWidth = 1;
+function drawCrafting() {
+  if (!craftingOpen) return;
+  var panelW = 320, panelH = RECIPES.length * 60 + 80;
+  var px = Math.floor(canvas.width  / 2) - panelW / 2;
+  var py = Math.floor(canvas.height / 2) - panelH / 2;
+
+  // Hintergrund
+  ctx.fillStyle = "rgba(20,20,30,0.93)";
+  ctx.fillRect(px, py, panelW, panelH);
+  ctx.strokeStyle = "#7ec8e3"; ctx.lineWidth = 2;
+  ctx.strokeRect(px+1, py+1, panelW-2, panelH-2);
+  ctx.lineWidth = 1;
+
+  // Titel
+  ctx.fillStyle = "#7ec8e3"; ctx.font = "bold 16px monospace"; ctx.textAlign = "center";
+  ctx.fillText("⚒ CRAFTING (E schließen)", px + panelW/2, py + 28);
+
+  // Aktuelles Inventar kurz anzeigen
+  ctx.font = "11px monospace"; ctx.fillStyle = "#aaa";
+  ctx.fillText(
+    "Stein:" + inventory[STONE] + "  Holz:" + inventory[WOOD] +
+    "  Diamant:" + inventory["diamond"],
+    px + panelW/2, py + 48
+  );
+
+  // Rezepte
+  for (var i = 0; i < RECIPES.length; i++) {
+    var r = RECIPES[i];
+    var ry = py + 65 + i * 60;
+    _craftBtnY[i] = ry + 16;
+
+    // Zeile
+    ctx.fillStyle = "rgba(255,255,255,0.05)";
+    ctx.fillRect(px + 8, ry + 6, panelW - 16, 46);
+
+    // Icon + Name
+    ctx.font = "22px monospace"; ctx.textAlign = "left"; ctx.fillStyle = "#fff";
+    ctx.fillText(r.icon, px + 16, ry + 36);
+    ctx.font = "bold 13px monospace";
+    ctx.fillStyle = "#eee";
+    ctx.fillText(r.name, px + 46, ry + 24);
+    ctx.font = "11px monospace"; ctx.fillStyle = "#aaa";
+    ctx.fillText(r.desc, px + 46, ry + 40);
+
+    // Button
+    var canDo = canCraft(r);
+    ctx.fillStyle = canDo ? "#2e7d32" : "#555";
+    ctx.fillRect(px + 240, ry + 16, 70, 26);
+    ctx.fillStyle = canDo ? "#fff" : "#999";
+    ctx.font = "bold 12px monospace"; ctx.textAlign = "center";
+    ctx.fillText(canDo ? "Bauen!" : "Fehlt", px + 275, ry + 33);
+
+    // Bereits gebaut?
+    if (r.max === 1 && inventory[r.key] >= 1) {
+      ctx.fillStyle = "#4caf50"; ctx.font = "11px monospace"; ctx.textAlign = "right";
+      ctx.fillText("✓ Gebaut", px + panelW - 10, ry + 52);
     }
-    ctx.fillStyle = "#fff"; ctx.font = "bold 10px monospace";
-    ctx.fillText(labels[i], x+4, y+12);
-    ctx.fillStyle = inventory[type] > 0 ? "#fff" : "#f66";
-    ctx.font = "11px monospace";
-    ctx.fillText(inventory[type], x+size-14, y+size-4);
+    if (r.key === "arrow") {
+      ctx.fillStyle = "#fff"; ctx.font = "11px monospace"; ctx.textAlign = "right";
+      ctx.fillText("Pfeile: " + inventory["arrow"], px + panelW - 10, ry + 52);
+    }
+  }
+  ctx.textAlign = "left";
+}
+
+function drawInventory() {
+  var blocks = [WOOD, STONE, DIRT, GRASS, LEAVES];
+  var sx = 8, sy = 8, sh = 22;
+  var totalH = (blocks.length + 2) * sh + 8; // +2 für Diamant-Zeile
+  ctx.fillStyle = "rgba(0,0,0,0.55)";
+  ctx.fillRect(sx-4, sy-4, 138, totalH);
+  for (var i = 0; i < blocks.length; i++) {
+    var type = blocks[i], iy = sy + i * sh;
+    ctx.fillStyle = COLORS[type];  ctx.fillRect(sx, iy, 14, 14);
+    ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.strokeRect(sx, iy, 14, 14);
+    ctx.fillStyle = "#fff"; ctx.font = "12px monospace";
+    ctx.fillText(NAMES[type] + ": " + inventory[type], sx+18, iy+11);
+  }
+  // Diamanten extra anzeigen (blau)
+  var dy = sy + blocks.length * sh;
+  ctx.fillStyle = "#29b6f6"; ctx.fillRect(sx, dy, 14, 14);
+  ctx.strokeStyle = "rgba(255,255,255,0.3)"; ctx.strokeRect(sx, dy, 14, 14);
+  ctx.fillStyle = "#29b6f6"; ctx.font = "12px monospace";
+  ctx.fillText("Diamant: " + inventory["diamond"], sx+18, dy+11);
+  // E-Hint
+  ctx.fillStyle = "#aaa"; ctx.font = "10px monospace";
+  ctx.fillText("[E] Crafting", sx, dy + sh + 8);
+}
+
+function drawHotbar() {
+  // 6 Slots: WOOD, STONE, DIRT, Spitzhacke, Schwert, Bogen
+  var slotDefs = [
+    { label:"1", type:"block",   block: WOOD,      icon:null,   color: COLORS[WOOD]  },
+    { label:"2", type:"block",   block: STONE,     icon:null,   color: COLORS[STONE] },
+    { label:"3", type:"block",   block: DIRT,       icon:null,   color: COLORS[DIRT]  },
+    { label:"4", type:"pickaxe", block: null,       icon:"⛏",   color: "#8d6e63"     },
+    { label:"5", type:"sword",   block: null,       icon:null,   color: "#9e9e9e"     },
+    { label:"6", type:"bow",     block: null,       icon:"🏹",   color: "#795548"     }
+  ];
+  var size = 36, gap = 5;
+  var total = slotDefs.length * (size + gap) - gap;
+  var sx = Math.floor((canvas.width - total) / 2);
+  var sy = canvas.height - size - 8;
+
+  for (var i = 0; i < slotDefs.length; i++) {
+    var sd = slotDefs[i];
+    var x  = sx + i * (size + gap);
+    var sel = (i === selectedSlot);
+
+    // Slot-Hintergrund
+    ctx.fillStyle = sel ? "rgba(255,255,255,0.35)" : "rgba(0,0,0,0.55)";
+    ctx.fillRect(x, sy, size, size);
+
+    if (sd.type === "block") {
+      // Block-Vorschau
+      ctx.fillStyle = sd.color;
+      ctx.fillRect(x+4, sy+4, size-8, size-8);
+      // Anzahl
+      ctx.fillStyle = inventory[sd.block] > 0 ? "#fff" : "#f66";
+      ctx.font = "11px monospace";
+      ctx.fillText(inventory[sd.block], x+size-14, sy+size-4);
+    } else if (sd.type === "sword") {
+      // Schwert (immer verfügbar)
+      var upgraded = inventory["sword_up"] > 0;
+      ctx.fillStyle = upgraded ? "#ffeb3b" : "#bdbdbd";
+      ctx.fillRect(x+4, sy+4, size-8, size-8);
+      ctx.fillStyle = upgraded ? "#f57f17" : "#555";
+      ctx.font = "bold 13px monospace"; ctx.textAlign = "center";
+      ctx.fillText(upgraded ? "⚔+" : "⚔", x+size/2, sy+size/2+5);
+      ctx.textAlign = "left";
+    } else {
+      // Werkzeug (Spitzhacke / Bogen)
+      var owned = inventory[sd.type] > 0;
+      ctx.fillStyle = owned ? sd.color : "#333";
+      ctx.fillRect(x+4, sy+4, size-8, size-8);
+      ctx.font = "18px monospace"; ctx.textAlign = "center";
+      ctx.fillStyle = owned ? "#fff" : "#666";
+      ctx.fillText(sd.icon, x+size/2, sy+size/2+6);
+      ctx.textAlign = "left";
+      // Pfeilanzahl beim Bogen
+      if (sd.type === "bow" && owned) {
+        ctx.fillStyle = inventory["arrow"] > 0 ? "#fff" : "#f66";
+        ctx.font = "10px monospace";
+        ctx.fillText(inventory["arrow"], x+size-14, sy+size-4);
+      }
+    }
+
+    // Auswahl-Rahmen
+    if (sel) {
+      ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
+      ctx.strokeRect(x+1, sy+1, size-2, size-2);
+      ctx.lineWidth = 1;
+    }
+    // Slot-Nummer
+    ctx.fillStyle = "#ccc"; ctx.font = "bold 9px monospace";
+    ctx.fillText(sd.label, x+4, sy+11);
+  }
+
+  // Keine-Spitzhacke-Warnung
+  if (player.noPickaxeFlash && Date.now() - player.noPickaxeFlash < 1500) {
+    ctx.fillStyle = "rgba(255,0,0,0.7)";
+    ctx.font = "bold 14px monospace"; ctx.textAlign = "center";
+    ctx.fillText("⛏ Brauchst eine Spitzhacke! (Taste 4)", canvas.width/2, canvas.height - size - 28);
+    ctx.textAlign = "left";
   }
 }
 
@@ -2261,6 +2686,7 @@ function gameLoop() {
   drawPlayer();
   drawInventory();
   drawHotbar();
+  drawCrafting();
   drawHpBar();
   if (player.dead) drawGameOver();
   update();
