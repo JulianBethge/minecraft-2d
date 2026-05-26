@@ -6,8 +6,31 @@ var canvas = document.getElementById("gameCanvas");
 var ctx    = canvas.getContext("2d");
 
 var TILE       = 32;
-var COLS       = Math.ceil(canvas.width  / TILE);
-var ROWS       = Math.ceil(canvas.height / TILE);
+var COLS       = 0;
+var ROWS       = 0;
+
+// Canvas-Größe je nach Gerät setzen (PC: 85% Fensterbreite, Handy: 640×480)
+function resizeCanvas() {
+  var mobile = window.innerWidth <= 800
+            || window.innerHeight > window.innerWidth
+            || ("ontouchstart" in window);
+  if (mobile) {
+    canvas.width  = 640;
+    canvas.height = 480;
+  } else {
+    var w = Math.round(window.innerWidth  * 0.85);
+    var h = Math.round(window.innerHeight * 0.82);
+    // Nicht breiter als sinnvoll + Seitenverhältnis 16:9 als Richtwert
+    var maxW = Math.round(h * (16 / 9));
+    if (w > maxW) w = maxW;
+    canvas.width  = w;
+    canvas.height = h;
+  }
+  COLS = Math.ceil(canvas.width  / TILE);
+  ROWS = Math.ceil(canvas.height / TILE);
+}
+resizeCanvas();
+window.addEventListener("resize", resizeCanvas);
 var WORLD_COLS = 240;  // doppelt so breit (war 120)
 var WORLD_ROWS = 64;   // doppelt so tief  (war 32)
 

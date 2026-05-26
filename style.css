@@ -5,7 +5,9 @@ body {
   font-family: monospace;
   text-align: center;
   margin: 0;
-  padding: 20px;
+  padding: 10px 20px;
+  /* Kein vertikaler Scroll wenn Canvas groß ist */
+  overflow-x: hidden;
 }
 
 h1 {
@@ -26,9 +28,8 @@ h1 {
   display: block;
   margin: 0 auto;
   cursor: crosshair;
-  /* Auf großen Bildschirmen: feste 640x480 */
   max-width: 100%;
-  height: auto;
+  /* Höhe folgt dem canvas-Attribut (kein CSS-Strecken) */
 }
 
 /* Standard: Handy-Elemente unsichtbar */
