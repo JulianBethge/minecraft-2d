@@ -1035,8 +1035,9 @@ function update() {
     if (distPX < 320) {
       z.dir = (zCX < pCX) ? 1 : -1;
 
-      // Horizontale Bewegung
-      z.x += z.dir * 1.5;
+      // Horizontale Bewegung (Elite schneller als Spieler)
+      var zSpeed = z.elite ? 4.8 : (z.strong ? 1.5 : 1.5);
+      z.x += z.dir * zSpeed;
 
       // Welche Zeilen belegt der Zombie (oben und unten)?
       var zRowTop = Math.floor(z.y / TILE);
@@ -1218,7 +1219,8 @@ function update() {
     }
 
     if (moveDir !== 0) {
-      s.x += moveDir * 1.0;
+      var sSpeed = s.elite ? 4.8 : 1.0;
+      s.x += moveDir * sSpeed;
 
       // Wand-Kollision mit der ECHTEN Bewegungsrichtung prüfen
       var sRowTop  = Math.floor(s.y / TILE);
@@ -1446,7 +1448,8 @@ function update() {
     if (cr.fuse === 0) {
       // ── Keine Lunte: Creeper läuft auf Spieler zu (wie Zombie) ───────────
       if (crDist < 320) {
-        cr.x += cr.dir * 1.2;
+        var crSpeed = cr.elite ? 4.8 : 1.2;
+        cr.x += cr.dir * crSpeed;
 
         var crRowTop = Math.floor(cr.y / TILE);
         var crRowBot = Math.floor((cr.y + cr.height - 1) / TILE);
@@ -1809,16 +1812,32 @@ function drawPlayer() {
   // Kopf
   ctx.fillStyle = "#f5d88a";
   ctx.fillRect(px+4, py, 20, 20);
-  // Augen: je nach Blickrichtung auf der richtigen Seite
+  // Augen + Lächeln: je nach Blickrichtung gespiegelt
   ctx.fillStyle = "#333";
   if (player.facing >= 0) {
-    // Schaut nach rechts
+    // Augen (nach rechts schauend)
     ctx.fillRect(px+7,  py+6, 4, 4);
     ctx.fillRect(px+15, py+6, 4, 4);
+    // Lächeln: zwei Wangen-Grübchen + Mund-Kurve
+    ctx.fillStyle = "#c8a060";           // Wangen-Schatten
+    ctx.fillRect(px+6,  py+13, 3, 2);   // linke Wange
+    ctx.fillRect(px+17, py+13, 3, 2);   // rechte Wange
+    ctx.fillStyle = "#7a4a10";           // Mund
+    ctx.fillRect(px+8,  py+14, 2, 2);   // linke Ecke
+    ctx.fillRect(px+10, py+15, 6, 2);   // Mitte (tiefer = Kurve)
+    ctx.fillRect(px+16, py+14, 2, 2);   // rechte Ecke
   } else {
-    // Schaut nach links (gespiegelt)
+    // Augen (nach links schauend)
     ctx.fillRect(px+9,  py+6, 4, 4);
     ctx.fillRect(px+17, py+6, 4, 4);
+    // Lächeln gespiegelt
+    ctx.fillStyle = "#c8a060";
+    ctx.fillRect(px+7,  py+13, 3, 2);
+    ctx.fillRect(px+18, py+13, 3, 2);
+    ctx.fillStyle = "#7a4a10";
+    ctx.fillRect(px+9,  py+14, 2, 2);
+    ctx.fillRect(px+11, py+15, 6, 2);
+    ctx.fillRect(px+17, py+14, 2, 2);
   }
 
   // --- Diamant-Rüstung (blauer Helm + Brustpanzer) ---
