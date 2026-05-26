@@ -258,18 +258,18 @@ var zombieSpawnTimer = Date.now();
 // Einen einzelnen Zombie an einer bestimmten Position hinzufügen
 // maxLimit ist optional: wird für Oberflächen-Spawn höher gesetzt
 // strong = true → großer, starker Zombie (seltener)
-function addZombieAt(col, row, maxLimit, strong) {
+// elite = true  → Boss-Zombie (sehr selten, viel stärker)
+function addZombieAt(col, row, maxLimit, strong, elite) {
   var limit = (maxLimit !== undefined) ? maxLimit : MAX_ZOMBIES;
   if (zombies.length >= limit) return false;
   if (getTile(col, row)   !== AIR) return false;
   if (getTile(col, row+1) !== AIR) return false;
   if (!isSolid(getTile(col, row+2)))  return false;
 
-  // Starker Zombie: größer, mehr HP, mehr Schaden
-  var w      = strong ? 30 : 22;
-  var h      = strong ? 62 : 48;
-  var hp     = strong ? 5  : 3;
-  var damage = strong ? 2.5 : 0.5;
+  var w      = elite ? 40  : (strong ? 30  : 22);
+  var h      = elite ? 82  : (strong ? 62  : 48);
+  var hp     = elite ? 20  : (strong ? 5   : 3);
+  var damage = elite ? 5   : (strong ? 2.5 : 0.5);
 
   zombies.push({
     x:            col * TILE + (TILE - w) / 2,
@@ -278,12 +278,13 @@ function addZombieAt(col, row, maxLimit, strong) {
     height:       h,
     hp:           hp,
     maxHp:        hp,
-    damage:       damage,   // Schaden pro Treffer
-    strong:       !!strong, // true = starker Zombie
+    damage:       damage,
+    strong:       !!strong || !!elite,
+    elite:        !!elite,
     velocityY:    0,
     onGround:     false,
-    lastHit:      0,         // wann hat dieser Zombie zuletzt den Spieler getroffen
-    jumpCooldown: 0,         // wann hat er zuletzt gesprungen
+    lastHit:      0,
+    jumpCooldown: 0,
     dir:          1
   });
   return true;
@@ -294,9 +295,10 @@ function spawnGroup() {
   for (var attempt = 0; attempt < 150; attempt++) {
     var baseCol = Math.floor(1 + Math.random() * (WORLD_COLS - 2));
     var baseRow = Math.floor(14 + Math.random() * (WORLD_ROWS - 18));
-    // 20% Chance auf einen starken Zombie als Gruppen-Anführer
-    var strong = Math.random() < 0.20;
-    if (!addZombieAt(baseCol, baseRow, undefined, strong)) continue;
+    // 5% Elite, 20% stark, Rest normal
+    var rng = Math.random();
+    var strong = rng < 0.25, elite = rng < 0.05;
+    if (!addZombieAt(baseCol, baseRow, undefined, strong, elite)) continue;
 
     // Noch 1–3 weitere normale Zombies in der Nähe spawnen
     var extra = 1 + Math.floor(Math.random() * 3);
@@ -334,9 +336,9 @@ function spawnGroupSurface() {
 
   // Zufälligen Spot wählen
   var spot = spots[Math.floor(Math.random() * spots.length)];
-  // 20% Chance auf starken Zombie als Gruppen-Anführer
-  var strong = Math.random() < 0.20;
-  if (!addZombieAt(spot.col, spot.row, surfaceLimit, strong)) return;
+  var rng2 = Math.random();
+  var strong = rng2 < 0.25, elite = rng2 < 0.05;
+  if (!addZombieAt(spot.col, spot.row, surfaceLimit, strong, elite)) return;
 
   // Noch 3–6 weitere Zombies daneben (größere Gruppe als tagsüber)
   var extra = 3 + Math.floor(Math.random() * 4);
@@ -359,20 +361,18 @@ var MAX_SKELETONS      = 15;
 var skeletonSpawnTimer = Date.now();
 var arrows             = []; // alle fliegenden Pfeile
 
-// Einen Skelett-Gegner an Position hinzufügen
-// strong = true → Boss-Skelett (größer, mehr HP, mehr Schaden)
-function addSkeletonAt(col, row, maxLimit, strong) {
+// strong = true → Boss-Skelett | elite = true → Knochenkönig
+function addSkeletonAt(col, row, maxLimit, strong, elite) {
   var limit = (maxLimit !== undefined) ? maxLimit : MAX_SKELETONS;
   if (skeletons.length >= limit) return false;
   if (getTile(col, row)   !== AIR) return false;
   if (getTile(col, row+1) !== AIR) return false;
   if (!isSolid(getTile(col, row+2)))  return false;
 
-  // Boss-Skelett: größer, mehr HP, mehr Schaden pro Pfeil
-  var w      = strong ? 30 : 22;
-  var h      = strong ? 62 : 48;
-  var hp     = strong ? 5  : 3;
-  var damage = strong ? 2.5 : 0.5;
+  var w      = elite ? 40  : (strong ? 30  : 22);
+  var h      = elite ? 82  : (strong ? 62  : 48);
+  var hp     = elite ? 20  : (strong ? 5   : 3);
+  var damage = elite ? 4   : (strong ? 2.5 : 0.5);
 
   skeletons.push({
     x:            col * TILE + (TILE - w) / 2,
@@ -381,12 +381,13 @@ function addSkeletonAt(col, row, maxLimit, strong) {
     height:       h,
     hp:           hp,
     maxHp:        hp,
-    damage:       damage,    // wird auf jeden Pfeil gegeben
-    strong:       !!strong,
+    damage:       damage,
+    strong:       !!strong || !!elite,
+    elite:        !!elite,
     velocityY:    0,
     onGround:     false,
     jumpCooldown: 0,
-    shootCooldown: Date.now() + 1000, // 1s Aufwärm-Zeit nach Spawn
+    shootCooldown: Date.now() + 1000,
     dir:          1
   });
   return true;
@@ -397,9 +398,9 @@ function spawnSkeletonGroup() {
   for (var attempt = 0; attempt < 150; attempt++) {
     var baseCol = Math.floor(1 + Math.random() * (WORLD_COLS - 2));
     var baseRow = Math.floor(14 + Math.random() * (WORLD_ROWS - 18));
-    // 15% Chance auf Boss-Skelett (seltener als bei Zombies)
-    var strong = Math.random() < 0.15;
-    if (!addSkeletonAt(baseCol, baseRow, undefined, strong)) continue;
+    var rng = Math.random();
+    var strong = rng < 0.20, elite = rng < 0.05;
+    if (!addSkeletonAt(baseCol, baseRow, undefined, strong, elite)) continue;
 
     // Noch 0–2 weitere Skelette daneben (kleinere Gruppen als Zombies)
     var extra = Math.floor(Math.random() * 3);
@@ -430,8 +431,9 @@ function spawnSkeletonGroupSurface() {
   if (spots.length === 0) return;
 
   var spot = spots[Math.floor(Math.random() * spots.length)];
-  var strong = Math.random() < 0.15;
-  if (!addSkeletonAt(spot.col, spot.row, surfaceLimit, strong)) return;
+  var rngS = Math.random();
+  var strong = rngS < 0.20, elite = rngS < 0.05;
+  if (!addSkeletonAt(spot.col, spot.row, surfaceLimit, strong, elite)) return;
 
   // Noch 1–3 weitere daneben
   var extra = 1 + Math.floor(Math.random() * 3);
@@ -453,16 +455,17 @@ var MAX_CREEPERS      = 10;
 var creeperSpawnTimer = Date.now();
 var explosions        = []; // Visuelle Explosions-Effekte
 
-function addCreeperAt(col, row, maxLimit, strong) {
+// strong = true → Boss-Creeper | elite = true → Mega-Creeper
+function addCreeperAt(col, row, maxLimit, strong, elite) {
   var limit = (maxLimit !== undefined) ? maxLimit : MAX_CREEPERS;
   if (creepers.length >= limit) return false;
   if (getTile(col, row)   !== AIR) return false;
   if (getTile(col, row+1) !== AIR) return false;
   if (!isSolid(getTile(col, row+2))) return false;
 
-  var w  = strong ? 28 : 20;
-  var h  = strong ? 60 : 46;
-  var hp = strong ? 5  : 3;
+  var w  = elite ? 36  : (strong ? 28  : 20);
+  var h  = elite ? 74  : (strong ? 60  : 46);
+  var hp = elite ? 18  : (strong ? 5   : 3);
 
   creepers.push({
     x:            col * TILE + (TILE - w) / 2,
@@ -471,13 +474,14 @@ function addCreeperAt(col, row, maxLimit, strong) {
     height:       h,
     hp:           hp,
     maxHp:        hp,
-    strong:       !!strong,
+    strong:       !!strong || !!elite,
+    elite:        !!elite,
     velocityY:    0,
     onGround:     false,
     jumpCooldown: 0,
     dir:          1,
-    fuse:         0,        // 0 = Lunte nicht gezündet
-    fuseStart:    0         // Zeitstempel wann Lunte angezündet wurde
+    fuse:         0,
+    fuseStart:    0
   });
   return true;
 }
@@ -486,8 +490,9 @@ function spawnCreeperGroup() {
   for (var attempt = 0; attempt < 150; attempt++) {
     var baseCol = Math.floor(1 + Math.random() * (WORLD_COLS - 2));
     var baseRow = Math.floor(14 + Math.random() * (WORLD_ROWS - 18));
-    var strong  = Math.random() < 0.12; // 12% Boss-Creeper
-    if (!addCreeperAt(baseCol, baseRow, undefined, strong)) continue;
+    var rng = Math.random();
+    var strong = rng < 0.17, elite = rng < 0.05;
+    if (!addCreeperAt(baseCol, baseRow, undefined, strong, elite)) continue;
     var extra = Math.floor(Math.random() * 2); // kleine Gruppen
     for (var g = 0; g < extra; g++) {
       var dc = Math.floor(Math.random() * 7) - 3;
@@ -508,9 +513,10 @@ function spawnCreeperGroupSurface() {
     }
   }
   if (spots.length === 0) return;
-  var spot   = spots[Math.floor(Math.random() * spots.length)];
-  var strong = Math.random() < 0.12;
-  if (!addCreeperAt(spot.col, spot.row, surfaceLimit, strong)) return;
+  var spot = spots[Math.floor(Math.random() * spots.length)];
+  var rngC = Math.random();
+  var strong = rngC < 0.17, elite = rngC < 0.05;
+  if (!addCreeperAt(spot.col, spot.row, surfaceLimit, strong, elite)) return;
   var extra = 1 + Math.floor(Math.random() * 3);
   for (var g = 0; g < extra; g++) {
     var dc = Math.floor(Math.random() * 9) - 4;
@@ -1411,8 +1417,8 @@ function update() {
     var crDist = Math.abs(crCX - crPCX);
     cr.dir = (crCX < crPCX) ? 1 : -1;
 
-    // Lunte-Radius: normal 56px, Boss 72px
-    var fuseRadius = cr.strong ? 72 : 56;
+    // Lunte-Radius: normal 56px, Boss 72px, Elite 96px
+    var fuseRadius = cr.elite ? 96 : (cr.strong ? 72 : 56);
 
     if (cr.fuse === 0) {
       // ── Keine Lunte: Creeper läuft auf Spieler zu (wie Zombie) ───────────
@@ -1455,7 +1461,7 @@ function update() {
       }
     } else {
       // ── Lunte brennt: Creeper steht still und blinkt ─────────────────────
-      var fuseTime = cr.strong ? 1500 : 2000; // Boss explodiert schneller
+      var fuseTime = cr.elite ? 1200 : (cr.strong ? 1500 : 2000); // Elite explodiert schneller
 
       // Spieler weggegangen? → Lunte erlischt
       if (crDist > fuseRadius + 20) {
@@ -1464,7 +1470,7 @@ function update() {
 
       // Zeit abgelaufen → EXPLOSION!
       if (Date.now() - cr.fuseStart >= fuseTime) {
-        var expRadius = cr.strong ? 5 : 3; // Explosionsradius in Tiles
+        var expRadius = cr.elite ? 8 : (cr.strong ? 5 : 3); // Explosionsradius in Tiles
         var expCCol   = Math.floor(crCX / TILE);
         var expCRow   = Math.floor((cr.y + cr.height * 0.5) / TILE);
 
@@ -1486,7 +1492,7 @@ function update() {
         );
         var maxExpDist = expRadius * TILE;
         if (pDist < maxExpDist) {
-          var dmg = cr.strong ? 8 : 4;
+          var dmg = cr.elite ? 15 : (cr.strong ? 8 : 4);
           if (inventory["armor"] > 0) dmg *= 0.5; // Rüstung halbiert Creeper-Schaden
           player.hp -= dmg * (1 - pDist / maxExpDist);
           if (player.hp <= 0) { player.hp = 0; player.dead = true; sndDeath(); }
@@ -2011,16 +2017,18 @@ function drawZombies() {
     var zx = Math.floor(z.x - cameraX);
     var zy = Math.floor(z.y - cameraY);
 
-    // Farbschema: grün = normal, dunkelrot = stark
-    var ratio = z.hp / z.maxHp; // 1.0 = voll, 0.0 = fast tot
+    // Farbschema: grün = normal, dunkelrot = stark, lila = Elite
+    var ratio = z.hp / z.maxHp;
 
     var bodyColor, headColor;
-    if (z.strong) {
-      // Starker Zombie: dunkelrot, wird schwärzer bei Schaden
+    if (z.elite) {
+      // Elite-Zombie: lila/schwarz, goldene Details
+      bodyColor = ratio > 0.6 ? "#4a148c" : ratio > 0.3 ? "#311b6e" : "#1a0a3a";
+      headColor = ratio > 0.6 ? "#6a1b9a" : ratio > 0.3 ? "#4a148c" : "#2a0a5a";
+    } else if (z.strong) {
       bodyColor = ratio > 0.6 ? "#7f0000" : ratio > 0.3 ? "#5c0000" : "#2a0000";
       headColor = ratio > 0.6 ? "#b71c1c" : ratio > 0.3 ? "#880000" : "#4a0000";
     } else {
-      // Normaler Zombie: grün, wird schwärzer bei Schaden
       bodyColor = ratio > 0.6 ? "#2e7d32" : ratio > 0.3 ? "#1b5e20" : "#0a2e0a";
       headColor = ratio > 0.6 ? "#388e3c" : ratio > 0.3 ? "#2e5e30" : "#1a3a1a";
     }
@@ -2037,14 +2045,14 @@ function drawZombies() {
     ctx.fillRect(zx + 1, zy, z.width - 2, headH);
 
     // Augen (immer 2, bei letztem Viertel HP ein X-Auge)
-    var eyeSize = z.strong ? 6 : 5;
-    ctx.fillStyle = z.strong ? "#ff1744" : "#e53935"; // starker Zombie leuchtet heller
+    var eyeSize = z.elite ? 8 : (z.strong ? 6 : 5);
+    ctx.fillStyle = z.elite ? "#ffd600" : (z.strong ? "#ff1744" : "#e53935"); // Elite: goldene Augen
     ctx.fillRect(zx + 3, zy + 5, eyeSize, eyeSize);
     if (ratio > 0.25) {
       ctx.fillRect(zx + z.width - eyeSize - 3, zy + 5, eyeSize, eyeSize);
     } else {
       // Auge zu: X
-      ctx.strokeStyle = z.strong ? "#ff1744" : "#e53935";
+      ctx.strokeStyle = z.elite ? "#ffd600" : (z.strong ? "#ff1744" : "#e53935");
       ctx.lineWidth = 2;
       var ex = zx + z.width - eyeSize - 3;
       ctx.beginPath(); ctx.moveTo(ex, zy+5); ctx.lineTo(ex+eyeSize, zy+5+eyeSize); ctx.stroke();
@@ -2052,16 +2060,31 @@ function drawZombies() {
       ctx.lineWidth = 1;
     }
 
-    // Starker Zombie: kleine Hörner auf dem Kopf
-    if (z.strong) {
+    // Starker Zombie: Hörner | Elite: goldene Krone
+    if (z.elite) {
+      // Goldene Krone
+      ctx.fillStyle = "#ffd600";
+      ctx.fillRect(zx + 3,            zy - 8,  z.width - 6, 5); // Kronenband
+      ctx.fillRect(zx + 5,            zy - 14, 5, 7);            // linker Zacken
+      ctx.fillRect(zx + z.width/2-2,  zy - 16, 6, 9);            // mittlerer Zacken (höher)
+      ctx.fillRect(zx + z.width - 10, zy - 14, 5, 7);            // rechter Zacken
+      ctx.fillStyle = "#ff6f00";                                   // Highlights
+      ctx.fillRect(zx + 5,            zy - 14, 2, 7);
+      ctx.fillRect(zx + z.width/2-2,  zy - 16, 2, 9);
+      ctx.fillRect(zx + z.width - 10, zy - 14, 2, 7);
+      // Lila Körper-Risse (Energie-Effekt)
+      ctx.fillStyle = "#ce93d8";
+      ctx.fillRect(zx + 4,  zy + Math.round(z.height*0.38), 2, 8);
+      ctx.fillRect(zx + z.width - 6, zy + Math.round(z.height*0.50), 2, 6);
+    } else if (z.strong) {
       ctx.fillStyle = "#4a0000";
-      ctx.fillRect(zx + 5,           zy - 5, 4, 6); // linkes Horn
-      ctx.fillRect(zx + z.width - 9, zy - 5, 4, 6); // rechtes Horn
+      ctx.fillRect(zx + 5,           zy - 5, 4, 6);
+      ctx.fillRect(zx + z.width - 9, zy - 5, 4, 6);
     }
 
     // Arme ausgestreckt
-    var armW = z.strong ? 13 : 10;
-    var armH = z.strong ? 8  : 6;
+    var armW = z.elite ? 16 : (z.strong ? 13 : 10);
+    var armH = z.elite ? 10 : (z.strong ? 8  : 6);
     ctx.fillStyle = bodyColor;
     if (z.dir >= 0) {
       ctx.fillRect(zx + z.width, zy + bodyY + 2, armW, armH);
@@ -2105,7 +2128,7 @@ function drawZombies() {
     // HP-Balken über dem Zombie (starker Zombie: orangefarbener Balken)
     ctx.fillStyle = "#333";
     ctx.fillRect(zx, zy - 8, z.width, 5);
-    ctx.fillStyle = z.strong ? "#ff6d00" : "#e53935";
+    ctx.fillStyle = z.elite ? "#ffd600" : (z.strong ? "#ff6d00" : "#e53935");
     ctx.fillRect(zx, zy - 8, Math.floor(z.width * ratio), 5);
   }
 }
@@ -2118,14 +2141,16 @@ function drawSkeletons() {
     var sy = Math.floor(s.y - cameraY);
     var ratio = s.hp / s.maxHp;
 
-    // Farbschema: weiß für normal, gelblich-grau für Boss
+    // Farbschema: weiß = normal, gelb = stark, dunkelblau = Elite
     var bodyColor, headColor;
-    if (s.strong) {
-      // Boss-Skelett: gelblich, leuchtende Augen
+    if (s.elite) {
+      // Elite-Skelett: dunkelblaue Knochen
+      bodyColor = ratio > 0.5 ? "#1a237e" : "#0d1459";
+      headColor = ratio > 0.5 ? "#283593" : "#1a237e";
+    } else if (s.strong) {
       bodyColor = ratio > 0.5 ? "#d7c290" : "#9c8a5e";
       headColor = ratio > 0.5 ? "#ede0b8" : "#b8a878";
     } else {
-      // Normales Skelett: weiß-grau
       bodyColor = ratio > 0.5 ? "#e0e0e0" : "#a0a0a0";
       headColor = ratio > 0.5 ? "#f5f5f5" : "#bfbfbf";
     }
@@ -2147,9 +2172,9 @@ function drawSkeletons() {
     ctx.fillStyle = headColor;
     ctx.fillRect(sx + 1, sy, s.width - 2, headH);
 
-    // Augenhöhlen (schwarz, oder rot beim Boss)
-    var eyeSize = s.strong ? 6 : 5;
-    ctx.fillStyle = s.strong ? "#ff1744" : "#000";
+    // Augenhöhlen (schwarz / rot beim Boss / cyan beim Elite)
+    var eyeSize = s.elite ? 8 : (s.strong ? 6 : 5);
+    ctx.fillStyle = s.elite ? "#00e5ff" : (s.strong ? "#ff1744" : "#000");
     ctx.fillRect(sx + 3, sy + 5, eyeSize, eyeSize);
     ctx.fillRect(sx + s.width - eyeSize - 3, sy + 5, eyeSize, eyeSize);
 
@@ -2163,8 +2188,18 @@ function drawSkeletons() {
       ctx.fillRect(sx + 4 + t * 4, sy + headH - 2, 1, 2);
     }
 
-    // Boss: Hörner aus Knochen auf dem Kopf
-    if (s.strong) {
+    // Elite: silberne Krone | Boss: Knochen-Hörner
+    if (s.elite) {
+      ctx.fillStyle = "#e0e0e0"; // Silber
+      ctx.fillRect(sx + 3,             sy - 7,  s.width - 6, 4);
+      ctx.fillRect(sx + 5,             sy - 13, 4, 7);
+      ctx.fillRect(sx + s.width/2 - 2, sy - 15, 6, 9);
+      ctx.fillRect(sx + s.width - 9,   sy - 13, 4, 7);
+      ctx.fillStyle = "#90caf9"; // blaues Glühen
+      ctx.fillRect(sx + 5,             sy - 13, 2, 7);
+      ctx.fillRect(sx + s.width/2 - 2, sy - 15, 2, 9);
+      ctx.fillRect(sx + s.width - 9,   sy - 13, 2, 7);
+    } else if (s.strong) {
       ctx.fillStyle = headColor;
       ctx.fillRect(sx + 5,           sy - 6, 4, 7);
       ctx.fillRect(sx + s.width - 9, sy - 6, 4, 7);
@@ -2199,7 +2234,7 @@ function drawSkeletons() {
     // HP-Balken über dem Skelett
     ctx.fillStyle = "#333";
     ctx.fillRect(sx, sy - 8, s.width, 5);
-    ctx.fillStyle = s.strong ? "#ff6d00" : "#bdbdbd";
+    ctx.fillStyle = s.elite ? "#00e5ff" : (s.strong ? "#ff6d00" : "#bdbdbd");
     ctx.fillRect(sx, sy - 8, Math.floor(s.width * ratio), 5);
   }
 }
@@ -2247,7 +2282,7 @@ function drawCreepers() {
 
     // Blinken wenn Lunte brennt (schneller je näher zur Explosion)
     if (cr.fuse === 1) {
-      var fuseTime = cr.strong ? 1500 : 2000;
+      var fuseTime = cr.elite ? 1200 : (cr.strong ? 1500 : 2000);
       var progress = (now - cr.fuseStart) / fuseTime; // 0 → 1
       var blinkSpeed = 100 + (1 - progress) * 300;    // fängt langsam an, wird schneller
       var blink = Math.floor(now / blinkSpeed) % 2 === 0;
@@ -2259,43 +2294,68 @@ function drawCreepers() {
       }
     }
 
-    // Körper (grün, dunkler bei Schaden)
-    var bodyColor = cr.strong
-      ? (ratio > 0.5 ? "#1a6b1a" : "#0f4010")
-      : (ratio > 0.5 ? "#3a9e3a" : "#1f6b1f");
+    // Körper: grün = normal, dunkelgrün = stark, schwarz mit lila Rissen = Elite
+    var bodyColor;
+    if (cr.elite) {
+      bodyColor = ratio > 0.5 ? "#1a001a" : "#0a000a";
+    } else if (cr.strong) {
+      bodyColor = ratio > 0.5 ? "#1a6b1a" : "#0f4010";
+    } else {
+      bodyColor = ratio > 0.5 ? "#3a9e3a" : "#1f6b1f";
+    }
     ctx.fillStyle = bodyColor;
     ctx.fillRect(cx, cy, cr.width, cr.height);
 
+    // Elite: lila Energie-Risse über den Körper
+    if (cr.elite) {
+      ctx.fillStyle = "#ce93d8";
+      ctx.fillRect(cx + Math.round(T*0.25), cy + Math.round(cr.height*0.45), 2, Math.round(cr.height*0.3));
+      ctx.fillRect(cx + Math.round(T*0.60), cy + Math.round(cr.height*0.38), 2, Math.round(cr.height*0.25));
+      ctx.fillRect(cx + Math.round(T*0.10), cy + Math.round(cr.height*0.60), Math.round(T*0.35), 2);
+    }
+
     // Typisches Creeper-Gesicht
     var headH = Math.round(cr.height * 0.38);
-    // Augen (zwei dunkle Quadrate)
-    var eyeS = Math.round(T * 0.22);
-    ctx.fillStyle = cr.strong ? "#001a00" : "#1a1a00";
+    var eyeS  = Math.round(T * 0.22);
+    ctx.fillStyle = cr.elite ? "#7b1fa2" : (cr.strong ? "#001a00" : "#1a1a00");
     ctx.fillRect(cx + Math.round(T * 0.12), cy + Math.round(headH * 0.2), eyeS, eyeS);
     ctx.fillRect(cx + Math.round(T * 0.65), cy + Math.round(headH * 0.2), eyeS, eyeS);
+    // Elite: lila Augen-Glühen
+    if (cr.elite) {
+      ctx.fillStyle = "#e040fb";
+      ctx.fillRect(cx + Math.round(T*0.14), cy + Math.round(headH*0.22), Math.round(eyeS*0.5), Math.round(eyeS*0.5));
+      ctx.fillRect(cx + Math.round(T*0.67), cy + Math.round(headH*0.22), Math.round(eyeS*0.5), Math.round(eyeS*0.5));
+    }
 
     // Mund: das typische "M"-förmige Creeper-Maul
     var mY  = cy + Math.round(headH * 0.55);
     var mW  = Math.round(T * 0.18);
     var mH  = Math.round(headH * 0.2);
     ctx.fillStyle = "#000";
-    ctx.fillRect(cx + Math.round(T*0.12), mY,      mW, mH);        // links oben
-    ctx.fillRect(cx + Math.round(T*0.12), mY + mH, mW, mH);        // links unten
-    ctx.fillRect(cx + Math.round(T*0.38), mY + mH, mW, mH);        // mitte unten
-    ctx.fillRect(cx + Math.round(T*0.62), mY,      mW, mH);        // rechts oben
-    ctx.fillRect(cx + Math.round(T*0.62), mY + mH, mW, mH);        // rechts unten
+    ctx.fillRect(cx + Math.round(T*0.12), mY,      mW, mH);
+    ctx.fillRect(cx + Math.round(T*0.12), mY + mH, mW, mH);
+    ctx.fillRect(cx + Math.round(T*0.38), mY + mH, mW, mH);
+    ctx.fillRect(cx + Math.round(T*0.62), mY,      mW, mH);
+    ctx.fillRect(cx + Math.round(T*0.62), mY + mH, mW, mH);
 
-    // Boss: dunkle Dornen an den Schultern
-    if (cr.strong) {
+    // Elite: Lila Hörner | Boss: Dornen
+    if (cr.elite) {
+      ctx.fillStyle = "#9c27b0";
+      ctx.fillRect(cx - 2,           cy - 10, 5, 11); // linkes Horn
+      ctx.fillRect(cx + cr.width - 3, cy - 10, 5, 11); // rechtes Horn
+      ctx.fillStyle = "#e040fb"; // Spitzen
+      ctx.fillRect(cx - 1,           cy - 14, 3, 5);
+      ctx.fillRect(cx + cr.width - 2, cy - 14, 3, 5);
+    } else if (cr.strong) {
       ctx.fillStyle = "#0a3a0a";
-      ctx.fillRect(cx - 4, cy + headH,     4, 8);
+      ctx.fillRect(cx - 4, cy + headH,       4, 8);
       ctx.fillRect(cx + cr.width, cy + headH, 4, 8);
     }
 
     // HP-Balken
     ctx.fillStyle = "#333";
     ctx.fillRect(cx, cy - 8, cr.width, 5);
-    ctx.fillStyle = cr.strong ? "#ff6d00" : "#4caf50";
+    ctx.fillStyle = cr.elite ? "#e040fb" : (cr.strong ? "#ff6d00" : "#4caf50");
     ctx.fillRect(cx, cy - 8, Math.floor(cr.width * ratio), 5);
   }
 }
