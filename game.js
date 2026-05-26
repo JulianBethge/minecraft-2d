@@ -2848,14 +2848,27 @@ function updateWater() {
 }
 
 // ------------------------------------------------------------
-// Game Loop
+// Game Loop — fixed 60-tick/s logic, uncapped rendering
 // ------------------------------------------------------------
-function gameLoop() {
-  updateWater();
-  drawBackground();   // Himmel (Farbe je nach Tag/Nacht)
-  drawSunMoon();      // Sonne oder Mond zeichnen
-  drawWorld();        // Blöcke zeichnen
-  drawNightOverlay(); // Dunkel-Overlay bei Nacht
+var _lastTime = 0;
+var _accumulator = 0;
+var TICK_MS = 1000 / 60;
+
+function gameLoop(timestamp) {
+  var elapsed = _lastTime ? Math.min(timestamp - _lastTime, 200) : 0;
+  _lastTime = timestamp;
+  _accumulator += elapsed;
+
+  while (_accumulator >= TICK_MS) {
+    updateWater();
+    update();
+    _accumulator -= TICK_MS;
+  }
+
+  drawBackground();
+  drawSunMoon();
+  drawWorld();
+  drawNightOverlay();
   drawTarget();
   drawZombies();
   drawSkeletons();
@@ -2868,8 +2881,8 @@ function gameLoop() {
   drawCrafting();
   drawHpBar();
   if (player.dead) drawGameOver();
-  update();
+
   requestAnimationFrame(gameLoop);
 }
 
-gameLoop();
+requestAnimationFrame(gameLoop);
