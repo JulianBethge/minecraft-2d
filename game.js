@@ -569,6 +569,7 @@ inventory["pickaxe"]  = 0;  // Spitzhacke (0=nicht gebaut, 1=gebaut)
 inventory["sword_up"] = 0;  // Schwert-Upgrade
 inventory["bow"]      = 0;  // Bogen
 inventory["arrow"]    = 0;  // Pfeile (Anzahl)
+inventory["armor"]    = 0;  // Diamant-Rüstung (0=nein, 1=ja, halbiert Schaden)
 
 // Hotbar: 6 Slots — 3 Blöcke + 3 Werkzeuge
 // Slot 0–2: Blöcke zum Bauen (WOOD, STONE, DIRT)
@@ -656,6 +657,14 @@ function tapOnHotbar(x, y) {
     if (x >= bx && x <= bx + size) {
       selectedSlot = i;
       if (i < 3) selectedBlock = slotBlocks[i];
+      return true;
+    }
+  }
+  // Crafting-Button rechts neben der Hotbar (nur Handy)
+  if (isMobile()) {
+    var cbx = sx + 6 * (size + gap) + 8;
+    if (x >= cbx && x <= cbx + size) {
+      craftingOpen = !craftingOpen;
       return true;
     }
   }
@@ -1074,7 +1083,8 @@ function update() {
     if (ox && oy) {
       var t2 = Date.now();
       if (t2 - z.lastHit >= 2000) {
-        player.hp -= z.damage;  // normaler Zombie: 0.5, starker: 2.5
+        var zDmg = z.damage * (inventory["armor"] > 0 ? 0.5 : 1); // Rüstung halbiert Schaden
+        player.hp -= zDmg;  // normaler Zombie: 0.5, starker: 2.5
         z.lastHit  = t2;
         if (player.hp <= 0) { player.hp = 0; player.dead = true; sndDeath(); }
         else sndHitPlayer();
@@ -1363,7 +1373,8 @@ function update() {
       // Gegner-Pfeile treffen den Spieler
       if (a.x >= player.x && a.x <= player.x + player.width &&
           a.y >= player.y && a.y <= player.y + player.height) {
-        player.hp -= a.damage;
+        var aDmg = a.damage * (inventory["armor"] > 0 ? 0.5 : 1); // Rüstung halbiert
+        player.hp -= aDmg;
         if (player.hp <= 0) { player.hp = 0; player.dead = true; sndDeath(); }
         else sndArrowHit();
         arrows.splice(ai, 1);
@@ -1476,6 +1487,7 @@ function update() {
         var maxExpDist = expRadius * TILE;
         if (pDist < maxExpDist) {
           var dmg = cr.strong ? 8 : 4;
+          if (inventory["armor"] > 0) dmg *= 0.5; // Rüstung halbiert Creeper-Schaden
           player.hp -= dmg * (1 - pDist / maxExpDist);
           if (player.hp <= 0) { player.hp = 0; player.dead = true; sndDeath(); }
         }
@@ -1780,6 +1792,35 @@ function drawPlayer() {
     ctx.fillRect(px+17, py+6, 4, 4);
   }
 
+  // --- Diamant-Rüstung (blauer Helm + Brustpanzer) ---
+  if (inventory["armor"] > 0) {
+    // Blauer Helm (sitzt oben auf dem Kopf, Visier-Schlitz für Augen)
+    ctx.fillStyle = "#1976d2";                // Diamantblau
+    ctx.fillRect(px+3, py-2, 22, 8);          // Helm-Oberteil
+    ctx.fillRect(px+3, py+4,  4, 8);          // linke Wange
+    ctx.fillRect(px+21, py+4, 4, 8);          // rechte Wange
+    ctx.fillStyle = "#64b5f6";                // Highlight
+    ctx.fillRect(px+3, py-2, 22, 2);
+    ctx.fillStyle = "#0d47a1";                // Schatten
+    ctx.fillRect(px+3, py+10, 4, 2);
+    ctx.fillRect(px+21, py+10, 4, 2);
+
+    // Blauer Brustpanzer
+    ctx.fillStyle = "#1976d2";
+    ctx.fillRect(px-1, py+20, player.width+2, 22); // breiter als Körper
+    ctx.fillStyle = "#64b5f6";                // Highlight oben
+    ctx.fillRect(px-1, py+20, player.width+2, 3);
+    ctx.fillStyle = "#0d47a1";                // Schatten unten
+    ctx.fillRect(px-1, py+39, player.width+2, 3);
+    // Senkrechte Trennlinie (Mitte) — sieht aus wie zwei Brustplatten
+    ctx.fillStyle = "#0d47a1";
+    ctx.fillRect(px + player.width/2 - 1, py+23, 2, 14);
+    // Diamant-Glitzer (kleiner heller Punkt)
+    ctx.fillStyle = "#b3e5fc";
+    ctx.fillRect(px+5,  py+25, 2, 2);
+    ctx.fillRect(px+18, py+32, 2, 2);
+  }
+
   // --- Waffe zeichnen (je nach ausgewähltem Slot) ---
   var elapsed   = Date.now() - player.swingTimer;
   var progress  = Math.min(1, elapsed / player.swingDuration);
@@ -1859,42 +1900,48 @@ function drawPlayer() {
     if (!facingRight) ctx.scale(-1, 1);
     ctx.rotate(angle);
 
+    // ── Spitzhacke wie im Minecraft-Sprite ────────────────────────
+    // Holzstiel entlang X, Metallkopf quer dazu am vorderen Ende (T-Form).
+    // Beim Schwingen sorgt die Rotation für die diagonale Optik.
+
     // Stiel (langer Holzgriff)
-    ctx.fillStyle = "#8b5e2a";
-    ctx.fillRect(-15, -2, 27, 4);
-    // Holzmaserung
-    ctx.fillStyle = "#6b4018";
-    ctx.fillRect(-15, 0, 27, 1);
+    ctx.fillStyle = "#8b5e2a";           // mittleres Braun
+    ctx.fillRect(-16, -2, 28, 4);
+    ctx.fillStyle = "#a87040";           // helle Oberkante (Highlight)
+    ctx.fillRect(-16, -2, 28, 1);
+    ctx.fillStyle = "#5a3410";           // dunkle Unterkante (Schatten)
+    ctx.fillRect(-16, 1, 28, 1);
 
-    // Kopf-Verbindungsstück (Metall, wo Stiel auf Klingen trifft)
-    ctx.fillStyle = "#787878";
-    ctx.fillRect(9, -5, 5, 10);
-    ctx.fillStyle = "#909090";
-    ctx.fillRect(10, -4, 3, 3);
+    // ── Metallkopf: senkrecht zum Stiel, am vorderen Ende ──────
+    // Mittelstück (wo Stiel auf Kopf trifft)
+    ctx.fillStyle = "#6e6e6e";
+    ctx.fillRect(7, -4, 7, 8);
 
-    // Obere Klinge (schräg nach oben-vorne, ~40°)
-    ctx.save();
-    ctx.translate(11, -3);
-    ctx.rotate(-0.65);           // ~37° nach oben
-    ctx.fillStyle = "#a0a0a0";
-    ctx.fillRect(0, -2, 16, 5);  // Klingenblatt
-    ctx.fillStyle = "#c8c8c8";   // Highlight oben
-    ctx.fillRect(0, -2, 16, 2);
-    ctx.fillStyle = "#d8d8d8";   // Spitze ganz hell
-    ctx.fillRect(13, -2, 3, 2);
-    ctx.restore();
+    // Obere Hälfte des Kopfes
+    ctx.fillStyle = "#9a9a9a";
+    ctx.fillRect(8, -12, 5, 8);
+    ctx.fillStyle = "#b8b8b8";           // Highlight
+    ctx.fillRect(8, -12, 2, 8);
+    // Obere Spitze (verjüngt)
+    ctx.fillStyle = "#8a8a8a";
+    ctx.fillRect(9, -15, 3, 3);
+    ctx.fillStyle = "#c0c0c0";
+    ctx.fillRect(9, -15, 1, 3);
 
-    // Untere Klinge (schräg nach unten-vorne, ~40°)
-    ctx.save();
-    ctx.translate(11, 3);
-    ctx.rotate(0.65);            // ~37° nach unten
-    ctx.fillStyle = "#a0a0a0";
-    ctx.fillRect(0, -2, 14, 5);  // Klingenblatt
-    ctx.fillStyle = "#c0c0c0";   // Highlight
-    ctx.fillRect(0, -2, 14, 2);
-    ctx.fillStyle = "#d0d0d0";   // Spitze
-    ctx.fillRect(11, -2, 3, 2);
-    ctx.restore();
+    // Untere Hälfte des Kopfes
+    ctx.fillStyle = "#9a9a9a";
+    ctx.fillRect(8, 4, 5, 8);
+    ctx.fillStyle = "#b8b8b8";           // Highlight
+    ctx.fillRect(8, 4, 2, 8);
+    // Untere Spitze
+    ctx.fillStyle = "#8a8a8a";
+    ctx.fillRect(9, 12, 3, 3);
+    ctx.fillStyle = "#c0c0c0";
+    ctx.fillRect(9, 12, 1, 3);
+
+    // Dunkler Umriss am Mittelstück (Kontrast zum Stiel)
+    ctx.fillStyle = "#4a4a4a";
+    ctx.fillRect(7, -4, 1, 8);
 
     ctx.restore();
 
@@ -2310,7 +2357,10 @@ var RECIPES = [
     desc: "5 Stein + 3 Diamanten",  icon: "🏹" },
   { name: "5 Pfeile",      key: "arrow",    max: 999,
     cost: { 4: 2, diamond: 1 },     // 2 Holz + 1 Diamant
-    desc: "2 Holz + 1 Diamant",     icon: "➶",  amount: 5 }
+    desc: "2 Holz + 1 Diamant",     icon: "➶",  amount: 5 },
+  { name: "Diamant-Rüstung", key: "armor", max: 1,
+    cost: { diamond: 8 },           // 8 Diamanten
+    desc: "8 Diamanten (halber Schaden)", icon: "🛡" }
 ];
 
 // Prüft ob genug Materialien vorhanden sind und führt Craft aus
@@ -2509,6 +2559,33 @@ function drawHotbar() {
     // Slot-Nummer
     ctx.fillStyle = "#ccc"; ctx.font = "bold 9px monospace";
     ctx.fillText(sd.label, x+4, sy+11);
+  }
+
+  // ── Crafting-Button (nur auf Handy, rechts neben der Hotbar) ───
+  if (isMobile()) {
+    var cbx = sx + 6 * (size + gap) + 8;   // direkt rechts neben Slot 6
+    var cby = sy;
+    // Hintergrund
+    ctx.fillStyle = craftingOpen ? "rgba(255,235,59,0.55)" : "rgba(0,0,0,0.55)";
+    ctx.fillRect(cbx, cby, size, size);
+    // Innenkasten (etwas heller, wie ein Werkbank-Look)
+    ctx.fillStyle = craftingOpen ? "#fff176" : "#6d4c2a";
+    ctx.fillRect(cbx+4, cby+4, size-8, size-8);
+    // Holz-Maserung (kleine Werkbank-Andeutung)
+    ctx.fillStyle = craftingOpen ? "#fdd835" : "#5a3a1e";
+    ctx.fillRect(cbx+4, cby+4+Math.floor((size-8)/2), size-8, 2);
+    // Hammer/Werkzeug-Icon
+    ctx.font = "20px monospace"; ctx.textAlign = "center";
+    ctx.fillStyle = "#fff";
+    ctx.fillText("🔨", cbx + size/2, cby + size/2 + 7);
+    ctx.textAlign = "left";
+    // Rahmen
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
+    ctx.strokeRect(cbx+1, cby+1, size-2, size-2);
+    ctx.lineWidth = 1;
+    // Label
+    ctx.fillStyle = "#ccc"; ctx.font = "bold 9px monospace";
+    ctx.fillText("E", cbx+4, cby+11);
   }
 
   // Keine-Spitzhacke-Warnung
