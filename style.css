@@ -37,6 +37,38 @@ h1 {
   display: none;
 }
 
+/* Tastatursteuerung unter dem Canvas */
+#keyboardControls {
+  margin-top: 14px;
+}
+
+.ctrl-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 6px 14px;
+}
+
+.ctrl-key {
+  display: inline-block;
+  background: #2a2a4a;
+  border: 1px solid #7ec8e3;
+  border-bottom: 3px solid #7ec8e3;
+  border-radius: 5px;
+  padding: 2px 8px;
+  font-size: 13px;
+  color: #7ec8e3;
+  font-family: monospace;
+  white-space: nowrap;
+}
+
+.ctrl-label {
+  font-size: 13px;
+  color: #aaa;
+  margin-right: 10px;
+}
+
 /* ───────────────────────────────────────────────────
    HANDY-MODUS: Bildschirm schmal oder höher als breit
    ─────────────────────────────────────────────────── */
@@ -60,6 +92,11 @@ h1 {
   /* Handy-Elemente sichtbar machen */
   .mobile-only {
     display: flex;
+  }
+
+  /* Desktop-only-Elemente auf Handy ausblenden */
+  .desktop-only {
+    display: none;
   }
 
   /* Modus-Knopf oben rechts auf dem Canvas */
